@@ -1,0 +1,140 @@
+"""
+FastAPI endpoint integration tests.
+Tests the API contract without requiring a running server.
+"""
+import io
+import json
+import pytest
+from pathlib import Path
+
+
+class TestHealthEndpoint:
+    def test_health_returns_ok(self, client):
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "software_versions" in data
+        assert "version" in data
+
+    def test_health_includes_python_version(self, client):
+        resp = client.get("/api/health")
+        data = resp.json()
+        versions = data["software_versions"]
+        assert "python" in versions
+        assert versions["python"].startswith("3.")
+
+
+class TestAssembliesEndpoint:
+    def test_list_assemblies_empty(self, client):
+        """Fresh DB should return an empty list."""
+        resp = client.get("/api/assemblies")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+    def test_get_nonexistent_assembly(self, client):
+        resp = client.get("/api/assemblies/999999")
+        assert resp.status_code == 404
+
+    def test_get_assembly_components_nonexistent(self, client):
+        resp = client.get("/api/assemblies/999999/components")
+        assert resp.status_code == 404
+
+
+class TestUploadEndpoint:
+    def test_upload_wrong_extension(self, client):
+        """Upload an IGES file — should be rejected with 400."""
+        data = {"file": ("model.iges", b"fake iges content", "application/octet-stream")}
+        resp = client.post("/api/upload", files=data)
+        assert resp.status_code == 400
+        assert "Unsupported" in resp.json()["detail"]
+
+    def test_upload_empty_file(self, client):
+        """Upload a zero-byte STEP file — should be rejected with 400."""
+        data = {"file": ("empty.step", b"", "application/octet-stream")}
+        resp = client.post("/api/upload", files=data)
+        assert resp.status_code == 400
+        assert "empty" in resp.json()["detail"].lower()
+
+    def test_upload_valid_step(self, client, simple_box_step):
+        """Upload a valid STEP file — should return 202 with assembly_id."""
+        with open(simple_box_step, "rb") as f:
+            content = f.read()
+
+        files = {"file": ("test_box.step", content, "application/octet-stream")}
+        resp = client.post("/api/upload", files=files)
+
+        assert resp.status_code == 202, f"Expected 202, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert "assembly_id" in data
+        assert data["assembly_id"] > 0
+        assert data["sha256"]
+        assert len(data["sha256"]) == 64  # SHA-256 hex string
+        assert data["status"] == "processing"
+
+    def test_upload_duplicate_file_different_assembly(self, client, simple_box_step):
+        """Uploading the same file twice creates two separate assembly records."""
+        with open(simple_box_step, "rb") as f:
+            content = f.read()
+
+        files = {"file": ("test_box.step", content, "application/octet-stream")}
+        resp1 = client.post("/api/upload", files=files)
+        resp2 = client.post("/api/upload", files=files)
+
+        assert resp1.status_code == 202
+        assert resp2.status_code == 202
+        # May have same SHA-256 but different assembly IDs
+        assert resp1.json()["assembly_id"] != resp2.json()["assembly_id"]
+        assert resp1.json()["sha256"] == resp2.json()["sha256"]
+
+    def test_upload_returns_sha256(self, client, simple_box_step):
+        """SHA-256 in response should match the actual file hash."""
+        from app.utils.hash import sha256_file
+        expected_hash = sha256_file(simple_box_step)
+
+        with open(simple_box_step, "rb") as f:
+            content = f.read()
+
+        files = {"file": ("test_box.step", content, "application/octet-stream")}
+        resp = client.post("/api/upload", files=files)
+
+        assert resp.status_code == 202
+        assert resp.json()["sha256"] == expected_hash
+
+
+class TestComponentLabelEndpoint:
+    def test_update_label_nonexistent(self, client):
+        resp = client.patch(
+            "/api/components/999999/label",
+            json={"user_label": "Test Label"},
+        )
+        assert resp.status_code == 404
+
+    def test_update_label_empty_rejected(self, client, simple_box_step):
+        """Empty label string should fail Pydantic validation (min_length=1)."""
+        resp = client.patch(
+            "/api/components/1/label",
+            json={"user_label": ""},
+        )
+        assert resp.status_code == 422  # Pydantic validation error
+
+
+class TestGeometryEndpoint:
+    def test_geometry_nonexistent_component(self, client):
+        resp = client.get("/api/geometry/999999")
+        assert resp.status_code == 404
+
+
+class TestErrorHandling:
+    def test_invalid_json_body(self, client):
+        """Sending invalid JSON should return 422."""
+        resp = client.patch(
+            "/api/components/1/label",
+            content=b"not json at all",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 422
+
+    def test_nonexistent_route(self, client):
+        resp = client.get("/api/nonexistent_route")
+        assert resp.status_code == 404
