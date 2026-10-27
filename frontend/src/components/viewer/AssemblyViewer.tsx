@@ -348,16 +348,16 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
     return map
   }, [components, assemblyCenter, explodeFactor])
 
-  // Construct section clipping plane (Phase 1)
+  // Construct section clipping plane (mapped from CAD Z-up to Three.js Y-up)
   const clippingPlane = useMemo(() => {
     if (sectionPlaneAxis === 'off') return null
-    let normal = new THREE.Vector3(0, 0, -1)
+    let normal = new THREE.Vector3(0, -1, 0)
     if (sectionPlaneAxis === '+X') normal = new THREE.Vector3(-1, 0, 0)
     else if (sectionPlaneAxis === '-X') normal = new THREE.Vector3(1, 0, 0)
-    else if (sectionPlaneAxis === '+Y') normal = new THREE.Vector3(0, -1, 0)
-    else if (sectionPlaneAxis === '-Y') normal = new THREE.Vector3(0, 1, 0)
-    else if (sectionPlaneAxis === '+Z') normal = new THREE.Vector3(0, 0, -1)
-    else if (sectionPlaneAxis === '-Z') normal = new THREE.Vector3(0, 0, 1)
+    else if (sectionPlaneAxis === '+Y') normal = new THREE.Vector3(0, 0, 1)
+    else if (sectionPlaneAxis === '-Y') normal = new THREE.Vector3(0, 0, -1)
+    else if (sectionPlaneAxis === '+Z') normal = new THREE.Vector3(0, -1, 0)
+    else if (sectionPlaneAxis === '-Z') normal = new THREE.Vector3(0, 1, 0)
 
     return new THREE.Plane(normal, -sectionPlaneOffset)
   }, [sectionPlaneAxis, sectionPlaneOffset])
@@ -421,47 +421,49 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
       {showGrid && <gridHelper args={[300, 50, '#3b82f6', '#334155']} />}
 
       <Suspense fallback={null}>
-        {visibleLeafComponents.map((comp: Component) => {
-          const compNameLower = comp.display_name.toLowerCase()
-          const isHousingCover =
-            compNameLower.includes('housing') ||
-            compNameLower.includes('cover') ||
-            compNameLower.includes('casing') ||
-            compNameLower.includes('cap')
+        <group rotation={[-Math.PI / 2, 0, 0]}>
+          {visibleLeafComponents.map((comp: Component) => {
+            const compNameLower = comp.display_name.toLowerCase()
+            const isHousingCover =
+              compNameLower.includes('housing') ||
+              compNameLower.includes('cover') ||
+              compNameLower.includes('casing') ||
+              compNameLower.includes('cap')
 
-          return (
-            <ComponentMesh
-              key={comp.id}
-              component={comp}
-              isSelected={selectedIds.has(comp.id)}
-              isObstructing={obstructingComponentIds.has(comp.id)}
-              isTranslucent={transparentComponentIds.has(comp.id)}
-              isXRay={isXRayMode && isHousingCover}
-              isVisible={true}
-              displacement={displacements.get(comp.id) || [0, 0, 0]}
-              clippingPlane={clippingPlane}
-              onSelect={selectComponent}
+            return (
+              <ComponentMesh
+                key={comp.id}
+                component={comp}
+                isSelected={selectedIds.has(comp.id)}
+                isObstructing={obstructingComponentIds.has(comp.id)}
+                isTranslucent={transparentComponentIds.has(comp.id)}
+                isXRay={isXRayMode && isHousingCover}
+                isVisible={true}
+                displacement={displacements.get(comp.id) || [0, 0, 0]}
+                clippingPlane={clippingPlane}
+                onSelect={selectComponent}
+              />
+            )
+          })}
+
+          {/* Milestone 2 Phase 6: 3D Visual Findings Overlays */}
+          {activeClearanceLine && (
+            <ClearanceLineOverlay
+              p1={activeClearanceLine.p1}
+              p2={activeClearanceLine.p2}
+              dist={activeClearanceLine.dist}
+              label={activeClearanceLine.label}
             />
-          )
-        })}
+          )}
 
-        {/* Milestone 2 Phase 6: 3D Visual Findings Overlays */}
-        {activeClearanceLine && (
-          <ClearanceLineOverlay
-            p1={activeClearanceLine.p1}
-            p2={activeClearanceLine.p2}
-            dist={activeClearanceLine.dist}
-            label={activeClearanceLine.label}
-          />
-        )}
-
-        {activeAccessVector && (
-          <AccessVectorOverlay
-            origin={activeAccessVector.origin}
-            dir={activeAccessVector.dir}
-            label={activeAccessVector.label}
-          />
-        )}
+          {activeAccessVector && (
+            <AccessVectorOverlay
+              origin={activeAccessVector.origin}
+              dir={activeAccessVector.dir}
+              label={activeAccessVector.label}
+            />
+          )}
+        </group>
       </Suspense>
     </>
   )

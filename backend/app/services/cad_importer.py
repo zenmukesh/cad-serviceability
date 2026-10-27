@@ -124,6 +124,74 @@ def _trsf_to_matrix(trsf: gp_Trsf) -> list[float]:
     ]
 
 
+def detect_step_units(step_path: Path) -> tuple[str, float]:
+    """
+    Detect unit system and conversion factor to mm from STEP header / context.
+    Returns (unit_name, scale_factor_to_mm).
+    """
+    try:
+        with open(step_path, "r", errors="ignore") as f:
+            header_sample = f.read(32768)
+        upper_text = header_sample.upper()
+        if ".METRE." in upper_text and ".MILLI." not in upper_text:
+            return "METRE", 1000.0
+        elif "INCH" in upper_text or "25.4" in upper_text:
+            return "INCH", 25.4
+        elif ".MILLI." in upper_text:
+            return "MILLIMETRE", 1.0
+    except Exception as e:
+        logger.warning(f"Error reading STEP units: {e}")
+    return "MILLIMETRE", 1.0
+
+
+def heal_shape(occ_shape: Any) -> Any:
+    """
+    Apply OpenCASCADE ShapeFix_Shape healing to fix non-manifold, open, or degenerate faces/edges.
+    """
+    try:
+        from OCP.ShapeFix import ShapeFix_Shape
+        sfs = ShapeFix_Shape(occ_shape)
+        sfs.Perform()
+        return sfs.Shape()
+    except Exception as e:
+        logger.debug(f"ShapeFix_Shape healing skipped/failed: {e}")
+        return occ_shape
+
+
+def detect_fastener_geometry(cq_shape: Any) -> tuple[bool, float]:
+    """
+    Classify whether a shape is a fastener by geometric features:
+    aspect ratio, cylindrical faces, and volume.
+    Returns (is_fastener: bool, confidence: float).
+    """
+    try:
+        bb = cq_shape.BoundingBox()
+        dx, dy, dz = bb.xlen, bb.ylen, bb.zlen
+        dims = sorted([dx, dy, dz])
+        d_min, d_mid, d_max = dims[0], dims[1], dims[2]
+        if d_min <= 0 or d_mid <= 0:
+            return False, 0.0
+        aspect_ratio = d_max / ((d_min + d_mid) / 2.0)
+        from OCP.GeomAbs import GeomAbs_Cylinder
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_FACE
+        cylindrical_count = 0
+        exp = TopExp_Explorer(cq_shape.wrapped, TopAbs_FACE)
+        while exp.More():
+            face = exp.Current()
+            surf = BRepAdaptor_Surface(face)
+            if surf.GetType() == GeomAbs_Cylinder:
+                cylindrical_count += 1
+            exp.Next()
+        if cylindrical_count >= 1 and 1.5 <= aspect_ratio <= 15.0:
+            confidence = min(0.95, 0.5 + 0.2 * cylindrical_count + 0.1 * min(aspect_ratio, 5.0))
+            return True, confidence
+    except Exception:
+        pass
+    return False, 0.0
+
+
 def _import_with_xcaf(
     step_path: Path,
     linear_deflection: float,
@@ -231,7 +299,8 @@ def _import_with_xcaf(
                     return
 
                 placed_shape = occ_shape.Moved(combined_loc)
-                cq_shape = Shape.cast(placed_shape)
+                healed_shape = heal_shape(placed_shape)
+                cq_shape = Shape.cast(healed_shape)
 
                 # Compute exact geometric properties
                 try:
@@ -488,7 +557,7 @@ def _import_with_trimesh(step_path: Path) -> ImportResult:
 
 
 def import_step_file(
-    step_path: Path,
+    step_path: Path | str,
     linear_deflection: float = 0.5,
     angular_deflection: float = 0.1,
 ) -> ImportResult:
@@ -496,6 +565,9 @@ def import_step_file(
     Main entry point for STEP assembly import.
     Uses assembly-aware XCAF reader first, then raw topology decomposition.
     """
+    if isinstance(step_path, str):
+        step_path = Path(step_path)
+
     if not step_path.exists():
         return ImportResult(success=False, error=f"File not found: {step_path}")
 

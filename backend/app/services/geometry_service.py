@@ -40,8 +40,10 @@ from app.schemas.serviceability import (
 
 logger = logging.getLogger(__name__)
 
-# Global in-memory cache: assembly_id -> {cad_entity_id: cq.Shape}
-_SHAPE_CACHE: Dict[int, Dict[str, Any]] = {}
+ALGO_VERSION = "2.1.0"
+
+# Global in-memory cache: (sha256, algo_version, params) -> {cad_entity_id: cq.Shape}
+_SHAPE_CACHE: Dict[Any, Dict[str, Any]] = {}
 
 CARDINAL_DIRECTIONS: List[Tuple[str, Tuple[float, float, float]]] = [
     ("+X", (1.0, 0.0, 0.0)),
@@ -79,9 +81,12 @@ def get_assembly_shapes(assembly_id: int, db: Session) -> Dict[str, Any]:
     if not assembly:
         raise ValueError(f"Assembly {assembly_id} not found in database")
 
-    cache_key = f"{assembly_id}:{assembly.sha256}"
+    cache_key = (assembly.sha256, ALGO_VERSION, "shapes")
+    legacy_key = f"{assembly_id}:{assembly.sha256}"
     if cache_key in _SHAPE_CACHE:
         return _SHAPE_CACHE[cache_key]
+    if legacy_key in _SHAPE_CACHE:
+        return _SHAPE_CACHE[legacy_key]
 
     step_path = _find_assembly_step_file(assembly)
     if not step_path:
@@ -161,6 +166,7 @@ def get_assembly_shapes(assembly_id: int, db: Session) -> Dict[str, Any]:
             traverse_node(root_lbl, root_loc, "")
 
     _SHAPE_CACHE[cache_key] = shapes_dict
+    _SHAPE_CACHE[legacy_key] = shapes_dict
     logger.info(f"Cached {len(shapes_dict)} CAD solid shapes for assembly {assembly_id} ({cache_key})")
     return shapes_dict
 
@@ -388,6 +394,9 @@ def analyze_clearances(
         .all()
     )
 
+    if not leaf_components:
+        return []
+
     results: List[ClearanceMeasurement] = []
 
     if target_component_id:
@@ -530,7 +539,7 @@ def analyze_component_obstructions(
 ) -> ComponentObstructionReport:
     """
     Analyze geometric access obstructions for a target component across all 6 cardinal directions (±X, ±Y, ±Z).
-    Uses OpenCASCADE analytical B-Rep IntCurvesFace_ShapeIntersector to test rays.
+    Uses OpenCASCADE analytical B-Rep IntCurvesFace_ShapeIntersector to test a dense cross-sectional grid of rays.
     Excludes sibling parts of the same physical fastener.
     """
     from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
@@ -551,11 +560,14 @@ def analyze_component_obstructions(
     if not target_shape:
         raise ValueError(f"CAD shape not available for component {target_comp.name}")
 
-    # Exclude self and sibling parts of the same physical fastener (e.g. head does not obstruct its own shank)
+    # Exclude self and sibling parts of the same physical fastener
     other_components = [
         c for c in leaf_components
         if c.id != target_component_id and not are_sibling_fastener_solids(target_comp, c)
     ]
+
+    target_inter = IntCurvesFace_ShapeIntersector()
+    target_inter.Load(target_shape.wrapped, 1e-4)
 
     intersectors: Dict[int, Any] = {}
     for other in other_components:
@@ -569,79 +581,203 @@ def analyze_component_obstructions(
                 logger.warning(f"Could not initialize intersector for {other.name}: {e}")
 
     direction_results: List[DirectionAccessResult] = []
-
     t_bb = target_comp.bounding_box
 
     for dir_name, dir_vec in CARDINAL_DIRECTIONS:
         dx, dy, dz = dir_vec
         gp_dir = gp_Dir(dx, dy, dz)
 
-        sample_origins: List[Tuple[float, float, float]] = []
-
+        # Dense cross-sectional sampling
         if abs(dx) > 0.5:
-            face_x = t_bb["xmax"] if dx > 0 else t_bb["xmin"]
-            for sy in [0.2, 0.5, 0.8]:
-                for sz in [0.2, 0.5, 0.8]:
-                    sample_origins.append((
-                        face_x,
-                        t_bb["ymin"] + sy * (t_bb["ymax"] - t_bb["ymin"]),
-                        t_bb["zmin"] + sz * (t_bb["zmax"] - t_bb["zmin"]),
-                    ))
-        elif abs(dy) > 0.5:
-            face_y = t_bb["ymax"] if dy > 0 else t_bb["ymin"]
-            for sx in [0.2, 0.5, 0.8]:
-                for sz in [0.2, 0.5, 0.8]:
-                    sample_origins.append((
-                        t_bb["xmin"] + sx * (t_bb["xmax"] - t_bb["xmin"]),
-                        face_y,
-                        t_bb["zmin"] + sz * (t_bb["zmax"] - t_bb["zmin"]),
-                    ))
-        else:
-            face_z = t_bb["zmax"] if dz > 0 else t_bb["zmin"]
-            for sx in [0.2, 0.5, 0.8]:
-                for sy in [0.2, 0.5, 0.8]:
-                    sample_origins.append((
-                        t_bb["xmin"] + sx * (t_bb["xmax"] - t_bb["xmin"]),
-                        t_bb["ymin"] + sy * (t_bb["ymax"] - t_bb["ymin"]),
-                        face_z,
-                    ))
+            y_min, y_max = t_bb["ymin"], t_bb["ymax"]
+            z_min, z_max = t_bb["zmin"], t_bb["zmax"]
+            y_span = max(0.1, y_max - y_min)
+            z_span = max(0.1, z_max - z_min)
+            ny = max(5, min(12, int(math.ceil(y_span / 2.5))))
+            nz = max(5, min(12, int(math.ceil(z_span / 2.5))))
+            x_back = t_bb["xmin"] - 1.0 if dx > 0 else t_bb["xmax"] + 1.0
 
-        total_rays = len(sample_origins)
+            valid_rays: List[Tuple[float, float, float]] = []
+            for iy in range(ny):
+                cy = y_min + (iy + 0.5) / ny * y_span
+                for iz in range(nz):
+                    cz = z_min + (iz + 0.5) / nz * z_span
+                    t_lin = gp_Lin(gp_Pnt(x_back, cy, cz), gp_dir)
+                    target_inter.Perform(t_lin, 0.0, max_travel_mm)
+                    if target_inter.IsDone() and target_inter.NbPnt() > 0:
+                        best_w = -1.0
+                        best_pnt = None
+                        for p_idx in range(1, target_inter.NbPnt() + 1):
+                            w = float(target_inter.WParameter(p_idx))
+                            if w > best_w:
+                                best_w = w
+                                p = target_inter.Pnt(p_idx)
+                                best_pnt = (float(p.X()), float(p.Y()), float(p.Z()))
+                        if best_pnt:
+                            valid_rays.append(best_pnt)
+
+        elif abs(dy) > 0.5:
+            x_min, x_max = t_bb["xmin"], t_bb["xmax"]
+            z_min, z_max = t_bb["zmin"], t_bb["zmax"]
+            x_span = max(0.1, x_max - x_min)
+            z_span = max(0.1, z_max - z_min)
+            nx = max(5, min(12, int(math.ceil(x_span / 2.5))))
+            nz = max(5, min(12, int(math.ceil(z_span / 2.5))))
+            y_back = t_bb["ymin"] - 1.0 if dy > 0 else t_bb["ymax"] + 1.0
+
+            valid_rays: List[Tuple[float, float, float]] = []
+            for ix in range(nx):
+                cx = x_min + (ix + 0.5) / nx * x_span
+                for iz in range(nz):
+                    cz = z_min + (iz + 0.5) / nz * z_span
+                    t_lin = gp_Lin(gp_Pnt(cx, y_back, cz), gp_dir)
+                    target_inter.Perform(t_lin, 0.0, max_travel_mm)
+                    if target_inter.IsDone() and target_inter.NbPnt() > 0:
+                        best_w = -1.0
+                        best_pnt = None
+                        for p_idx in range(1, target_inter.NbPnt() + 1):
+                            w = float(target_inter.WParameter(p_idx))
+                            if w > best_w:
+                                best_w = w
+                                p = target_inter.Pnt(p_idx)
+                                best_pnt = (float(p.X()), float(p.Y()), float(p.Z()))
+                        if best_pnt:
+                            valid_rays.append(best_pnt)
+
+        else:
+            x_min, x_max = t_bb["xmin"], t_bb["xmax"]
+            y_min, y_max = t_bb["ymin"], t_bb["ymax"]
+            x_span = max(0.1, x_max - x_min)
+            y_span = max(0.1, y_max - y_min)
+            nx = max(5, min(12, int(math.ceil(x_span / 2.5))))
+            ny = max(5, min(12, int(math.ceil(y_span / 2.5))))
+            z_back = t_bb["zmin"] - 1.0 if dz > 0 else t_bb["zmax"] + 1.0
+
+            valid_rays: List[Tuple[float, float, float]] = []
+            for ix in range(nx):
+                cx = x_min + (ix + 0.5) / nx * x_span
+                for iy in range(ny):
+                    cy = y_min + (iy + 0.5) / ny * y_span
+                    t_lin = gp_Lin(gp_Pnt(cx, cy, z_back), gp_dir)
+                    target_inter.Perform(t_lin, 0.0, max_travel_mm)
+                    if target_inter.IsDone() and target_inter.NbPnt() > 0:
+                        best_w = -1.0
+                        best_pnt = None
+                        for p_idx in range(1, target_inter.NbPnt() + 1):
+                            w = float(target_inter.WParameter(p_idx))
+                            if w > best_w:
+                                best_w = w
+                                p = target_inter.Pnt(p_idx)
+                                best_pnt = (float(p.X()), float(p.Y()), float(p.Z()))
+                        if best_pnt:
+                            valid_rays.append(best_pnt)
+
+        total_rays = len(valid_rays)
+        if total_rays == 0:
+            cx = (t_bb["xmin"] + t_bb["xmax"]) / 2.0
+            cy = (t_bb["ymin"] + t_bb["ymax"]) / 2.0
+            cz = (t_bb["zmin"] + t_bb["zmax"]) / 2.0
+            valid_rays = [(cx, cy, cz)]
+            total_rays = 1
+
         comp_hits: Dict[int, Dict[str, Any]] = {}
         blocked_ray_count = 0
 
-        for ox, oy, oz in sample_origins:
-            lin = gp_Lin(gp_Pnt(ox + dx * 0.05, oy + dy * 0.05, oz + dz * 0.05), gp_dir)
-            ray_blocked = False
+        # Direct face contact check in direction of motion
+        for other in other_components:
+            is_touching_in_dir = False
+            if dx > 0.5 and abs(t_bb["xmax"] - other.bb_xmin) <= 0.05:
+                if max(t_bb["ymin"], other.bb_ymin) < min(t_bb["ymax"], other.bb_ymax) - 0.1 and max(t_bb["zmin"], other.bb_zmin) < min(t_bb["zmax"], other.bb_zmax) - 0.1:
+                    is_touching_in_dir = True
+            elif dx < -0.5 and abs(t_bb["xmin"] - other.bb_xmax) <= 0.05:
+                if max(t_bb["ymin"], other.bb_ymin) < min(t_bb["ymax"], other.bb_ymax) - 0.1 and max(t_bb["zmin"], other.bb_zmin) < min(t_bb["zmax"], other.bb_zmax) - 0.1:
+                    is_touching_in_dir = True
+            elif dy > 0.5 and abs(t_bb["ymax"] - other.bb_ymin) <= 0.05:
+                if max(t_bb["xmin"], other.bb_xmin) < min(t_bb["xmax"], other.bb_xmax) - 0.1 and max(t_bb["zmin"], other.bb_zmin) < min(t_bb["zmax"], other.bb_zmax) - 0.1:
+                    is_touching_in_dir = True
+            elif dy < -0.5 and abs(t_bb["ymin"] - other.bb_ymax) <= 0.05:
+                if max(t_bb["xmin"], other.bb_xmin) < min(t_bb["xmax"], other.bb_xmax) - 0.1 and max(t_bb["zmin"], other.bb_zmin) < min(t_bb["zmax"], other.bb_zmax) - 0.1:
+                    is_touching_in_dir = True
+            elif dz > 0.5 and abs(t_bb["zmax"] - other.bb_zmin) <= 0.05:
+                if max(t_bb["xmin"], other.bb_xmin) < min(t_bb["xmax"], other.bb_xmax) - 0.1 and max(t_bb["ymin"], other.bb_ymin) < min(t_bb["ymax"], other.bb_ymax) - 0.1:
+                    is_touching_in_dir = True
+            elif dz < -0.5 and abs(t_bb["zmin"] - other.bb_zmax) <= 0.05:
+                if max(t_bb["xmin"], other.bb_xmin) < min(t_bb["xmax"], other.bb_xmax) - 0.1 and max(t_bb["ymin"], other.bb_ymin) < min(t_bb["ymax"], other.bb_ymax) - 0.1:
+                    is_touching_in_dir = True
+
+            if is_touching_in_dir:
+                contact_pt = Point3D(
+                    x=float((t_bb["xmin"] + t_bb["xmax"]) / 2.0),
+                    y=float((t_bb["ymin"] + t_bb["ymax"]) / 2.0),
+                    z=float(t_bb["zmin"] if dz < -0.5 else (t_bb["zmax"] if dz > 0.5 else ((t_bb["zmin"] + t_bb["zmax"]) / 2.0))),
+                )
+                comp_hits[other.id] = {
+                    "min_dist": 0.0,
+                    "hit_count": total_rays,
+                    "nearest_pt": contact_pt,
+                }
+                blocked_ray_count = total_rays
+
+        for rx, ry, rz in valid_rays:
+            lin = gp_Lin(gp_Pnt(rx, ry, rz), gp_dir)
+            ray_hit = False
 
             for other in other_components:
+                # If already registered as direct contact, skip ray intersection
+                if other.id in comp_hits and comp_hits[other.id]["min_dist"] == 0.0:
+                    continue
+
+                # Bounding-box ray corridor pre-filter
+                if abs(dx) > 0.5:
+                    if not (other.bb_ymin - 0.1 <= ry <= other.bb_ymax + 0.1 and other.bb_zmin - 0.1 <= rz <= other.bb_zmax + 0.1):
+                        continue
+                    if dx > 0 and other.bb_xmax < rx - 0.1:
+                        continue
+                    if dx < 0 and other.bb_xmin > rx + 0.1:
+                        continue
+                elif abs(dy) > 0.5:
+                    if not (other.bb_xmin - 0.1 <= rx <= other.bb_xmax + 0.1 and other.bb_zmin - 0.1 <= rz <= other.bb_zmax + 0.1):
+                        continue
+                    if dy > 0 and other.bb_ymax < ry - 0.1:
+                        continue
+                    if dy < 0 and other.bb_ymin > ry + 0.1:
+                        continue
+                else:
+                    if not (other.bb_xmin - 0.1 <= rx <= other.bb_xmax + 0.1 and other.bb_ymin - 0.1 <= ry <= other.bb_ymax + 0.1):
+                        continue
+                    if dz > 0 and other.bb_zmax < rz - 0.1:
+                        continue
+                    if dz < 0 and other.bb_zmin > rz + 0.1:
+                        continue
+
                 inter = intersectors.get(other.id)
                 if not inter:
                     continue
 
-                inter.Perform(lin, 0.01, max_travel_mm)
+                inter.Perform(lin, 1e-3, max_travel_mm)
                 if inter.IsDone() and inter.NbPnt() > 0:
                     for idx in range(1, inter.NbPnt() + 1):
                         dist = float(inter.WParameter(idx))
-                        if dist > 0.05:
-                            ray_blocked = True
-                            p = inter.Pnt(idx)
-                            pt = Point3D(x=float(p.X()), y=float(p.Y()), z=float(p.Z()))
+                        meas_dist = 0.0 if dist <= 0.05 else dist
 
-                            if other.id not in comp_hits:
-                                comp_hits[other.id] = {
-                                    "min_dist": dist,
-                                    "hit_count": 1,
-                                    "nearest_pt": pt,
-                                }
-                            else:
-                                comp_hits[other.id]["hit_count"] += 1
-                                if dist < comp_hits[other.id]["min_dist"]:
-                                    comp_hits[other.id]["min_dist"] = dist
-                                    comp_hits[other.id]["nearest_pt"] = pt
-                            break
+                        p = inter.Pnt(idx)
+                        pt = Point3D(x=float(p.X()), y=float(p.Y()), z=float(p.Z()))
+                        ray_hit = True
 
-            if ray_blocked:
+                        if other.id not in comp_hits:
+                            comp_hits[other.id] = {
+                                "min_dist": meas_dist,
+                                "hit_count": 1,
+                                "nearest_pt": pt,
+                            }
+                        else:
+                            comp_hits[other.id]["hit_count"] += 1
+                            if meas_dist < comp_hits[other.id]["min_dist"]:
+                                comp_hits[other.id]["min_dist"] = meas_dist
+                                comp_hits[other.id]["nearest_pt"] = pt
+                        break
+
+            if ray_hit:
                 blocked_ray_count += 1
 
         obstructing_list: List[ObstructingComponent] = []
@@ -654,7 +790,7 @@ def analyze_component_obstructions(
                 min_direction_dist = dist
 
             blockage = hit_info["hit_count"] / float(total_rays)
-            is_contact = dist <= 0.5
+            is_contact = dist <= 0.05
 
             if is_contact or (dist < 10.0 and blockage > 0.4):
                 sev = "CRITICAL"
@@ -679,9 +815,8 @@ def analyze_component_obstructions(
         obstructing_list.sort(key=lambda o: o.distance_to_obstruction_mm)
 
         blockage_ratio = blocked_ray_count / float(total_rays) if total_rays > 0 else 0.0
-        # A direction is considered clear if either 0 rays blocked OR free travel >= 50 mm
         free_travel = min_direction_dist if blocked_ray_count > 0 else max_travel_mm
-        is_clear = (blocked_ray_count == 0) or (free_travel >= 50.0)
+        is_clear = (blocked_ray_count == 0)
 
         direction_results.append(
             DirectionAccessResult(
@@ -696,7 +831,6 @@ def analyze_component_obstructions(
 
     # Best direction has highest free travel and lowest blockage
     best_dir = max(direction_results, key=lambda d: (d.free_travel_mm, -d.blockage_ratio))
-    # Truly trapped only if all directions have restricted travel (< 15 mm)
     all_blocked = all(d.free_travel_mm < 15.0 for d in direction_results)
 
     return ComponentObstructionReport(
@@ -710,188 +844,10 @@ def analyze_component_obstructions(
         directions=direction_results,
         confidence="exact_brep",
         limitations=(
-            "Evaluated along 6 cardinal directions using 9-ray spatial sampling grid and "
+            "Evaluated along 6 cardinal directions using dense cross-sectional ray grid and "
             "OpenCASCADE analytical B-Rep curve-face intersection."
         ),
     )
-
-
-def build_disassembly_graph(assembly_id: int, db: Session) -> DisassemblyGraph:
-    """
-    Construct a Disassembly Dependency Directed Acyclic Graph (DAG) and topological removal sequence.
-    Deduplicates multi-solid fasteners and excludes parent assemblies from physical part counts.
-    """
-    leaf_components = (
-        db.query(Component)
-        .filter(Component.assembly_id == assembly_id, Component.is_leaf == 1)
-        .all()
-    )
-
-    nodes: List[DependencyNode] = [
-        DependencyNode(
-            component_id=c.id,
-            name=c.display_name,
-            cad_entity_id=c.cad_entity_id,
-            component_type=c.component_type or "solid",
-            is_leaf=bool(c.is_leaf),
-            depth=c.depth,
-        )
-        for c in leaf_components
-    ]
-
-    edges: List[DependencyEdge] = []
-    predecessors: Dict[int, Set[int]] = {c.id: set() for c in leaf_components}
-    rigid_predecessors: Dict[int, Set[int]] = {c.id: set() for c in leaf_components}
-    best_directions: Dict[int, str] = {}
-
-    for c in leaf_components:
-        try:
-            report = analyze_component_obstructions(assembly_id, c.id, db)
-            best_dir_name = report.best_direction
-            best_directions[c.id] = best_dir_name or "+Z"
-
-            best_dir_result = next((d for d in report.directions if d.direction_name == best_dir_name), None)
-            if best_dir_result:
-                for ob in best_dir_result.obstructing_components:
-                    if ob.severity in ["CRITICAL", "WARNING"] and ob.component_id != c.id:
-                        predecessors[c.id].add(ob.component_id)
-                        edges.append(
-                            DependencyEdge(
-                                precedent_id=ob.component_id,
-                                precedent_name=ob.component_name,
-                                dependent_id=c.id,
-                                dependent_name=c.display_name,
-                                reason=f"geometric_obstruction_along_{best_dir_name}",
-                            )
-                        )
-        except Exception as e:
-            logger.warning(f"Error computing obstruction for {c.name}: {e}")
-
-    # ── Fastener Assembly Grouping & Clamping Constraints ──
-    fastener_comps = [c for c in leaf_components if is_fastener(c.display_name)]
-    cover_comps = [c for c in leaf_components if is_housing_or_cover(c.display_name) and not is_fastener(c.display_name)]
-    all_parents = {
-        c.cad_entity_id: c for c in db.query(Component).filter(Component.assembly_id == assembly_id, Component.is_leaf == 0).all()
-    }
-
-    # Group fastener solids by shared parent assembly or normalized physical fastener ID
-    fastener_groups: Dict[str, List[Component]] = {}
-    for f in fastener_comps:
-        group_key = f.parent_cad_id or get_physical_fastener_id(f.display_name, "")
-        fastener_groups.setdefault(group_key, []).append(f)
-
-    # Detect which components each fastener group secures/clamps
-    clamped_by_group: Dict[str, Set[int]] = {gk: set() for gk in fastener_groups}
-    for gk, members in fastener_groups.items():
-        parent_comp = all_parents.get(gk)
-        parent_name = parent_comp.display_name.lower() if parent_comp else ""
-
-        for cov in cover_comps:
-            cov_name = cov.display_name.lower()
-            name_match = (
-                ("guard" in parent_name and "guard" in cov_name) or
-                ("cover" in parent_name and "cover" in cov_name) or
-                ("housing" in parent_name and "housing" in cov_name) or
-                any(("guard" in m.display_name.lower() and "guard" in cov_name) for m in members) or
-                any(("cover" in m.display_name.lower() and "cover" in cov_name) for m in members)
-            )
-            if name_match:
-                clamped_by_group[gk].add(cov.id)
-                continue
-
-            # Geometric bounding overlap / penetration check
-            for m in members:
-                dx = max(0.0, cov.bb_xmin - m.bb_xmax, m.bb_xmin - cov.bb_xmax)
-                dy = max(0.0, cov.bb_ymin - m.bb_ymax, m.bb_ymin - cov.bb_ymax)
-                dz = max(0.0, cov.bb_zmin - m.bb_zmax, m.bb_zmin - cov.bb_zmax)
-                if dx == 0 and dy == 0 and dz == 0:
-                    clamped_by_group[gk].add(cov.id)
-                    break
-
-    # Apply clamping constraints: Fastener -> Clamped Component
-    for gk, members in fastener_groups.items():
-        head_m = next((m for m in members if "head" in m.display_name.lower()), members[0])
-        head_b_dir = best_directions.get(head_m.id, "+Z")
-        head_obs: List[int] = []
-        try:
-            h_rep = analyze_component_obstructions(assembly_id, head_m.id, db)
-            h_d_res = next((d for d in h_rep.directions if d.direction_name == head_b_dir), None)
-            if h_d_res:
-                head_obs = [o.component_id for o in h_d_res.obstructing_components if o.severity in ["CRITICAL", "WARNING"]]
-        except Exception:
-            pass
-
-        for cov_id in clamped_by_group[gk]:
-            cov_comp = next((c for c in leaf_components if c.id == cov_id), None)
-            if not cov_comp:
-                continue
-
-            # Check if cover genuinely obstructs fastener head along its proposed extraction corridor
-            if cov_id in head_obs:
-                # Fastener cannot be removed along proposed direction while cover is installed!
-                # Keep reverse obstruction dependency. This is a physical cycle.
-                for m in members:
-                    rigid_predecessors[m.id].add(cov_id)
-            else:
-                # Cover does not block the head; clear reverse dependency on cover from fastener members
-                for m in members:
-                    predecessors[m.id].discard(cov_id)
-                    rigid_predecessors[m.id].discard(cov_id)
-                    edges = [e for e in edges if not (e.precedent_id == cov_id and e.dependent_id == m.id)]
-
-            # Fastener must precede clamped component
-            for m in members:
-                predecessors[cov_id].add(m.id)
-                rigid_predecessors[cov_id].add(m.id)
-                if not any(e.precedent_id == m.id and e.dependent_id == cov_id for e in edges):
-                    edges.append(
-                        DependencyEdge(
-                            precedent_id=m.id,
-                            precedent_name=m.display_name,
-                            dependent_id=cov_id,
-                            dependent_name=cov_comp.display_name,
-                            reason="securing_fastener_clamp",
-                        )
-                    )
-
-    # Internal components require cover/housing/guard open first
-    for c in leaf_components:
-        c_name = c.display_name.lower()
-        if any(k in c_name for k in ["gear", "shaft", "bearing", "rotor", "stator", "wheel", "spacer", "pinion"]):
-            for cov in cover_comps:
-                if cov.id != c.id and any(k in cov.display_name.lower() for k in ["cover", "housing", "guard", "shield"]):
-                    if c.id not in predecessors[cov.id]:
-                        predecessors[c.id].add(cov.id)
-                        rigid_predecessors[c.id].add(cov.id)
-                        if not any(e.precedent_id == cov.id and e.dependent_id == c.id for e in edges):
-                            edges.append(
-                                DependencyEdge(
-                                    precedent_id=cov.id,
-                                    precedent_name=cov.display_name,
-                                    dependent_id=c.id,
-                                    dependent_name=c.display_name,
-                                    reason="internal_housing_access_prerequisite",
-                                )
-                            )
-
-    initial_predecessors: Dict[int, Set[int]] = {c.id: set(predecessors[c.id]) for c in leaf_components}
-    initial_rigid_predecessors: Dict[int, Set[int]] = {c.id: set(rigid_predecessors[c.id]) for c in leaf_components}
-
-    def get_display_name(cid: int) -> str:
-        comp = next((c for c in leaf_components if c.id == cid), None)
-        if not comp:
-            return f"Component_{cid}"
-        if is_fastener(comp.display_name):
-            f_gk = comp.parent_cad_id or get_physical_fastener_id(comp.display_name, "")
-            p_comp = all_parents.get(f_gk)
-            return p_comp.display_name if p_comp else get_physical_fastener_id(comp.display_name, "")
-        return comp.display_name
-
-    def get_group_unsatisfied(gk: str, rem_set: Set[int]) -> Set[int]:
-        mems = fastener_groups[gk]
-        head_m = next((m for m in mems if "head" in m.display_name.lower()), mems[0])
-        unsat = set(predecessors[head_m.id]) - set(m.id for m in mems)
-        return unsat - rem_set
 
 def compute_step_effort_cost(
     is_fastener_op: bool,
@@ -928,6 +884,109 @@ def compute_step_effort_cost(
     return round(base + reorient + dist_cost, 2)
 
 
+# Global Caches for Swept-Volume Collision Simulation & Overlap Volumes
+_PAIRWISE_SWEPT_COLLISION_CACHE = {}
+_PAIRWISE_INITIAL_OVERLAP_CACHE = {}
+
+def check_shape_swept_collision(
+    moving_shape: Any,
+    m_bb: Dict[str, float],
+    dir_vec: Tuple[float, float, float],
+    travel_dist: float,
+    obs_shape: Any,
+    o_bb: Dict[str, float],
+    initial_overlap_vol: float = 0.0,
+) -> Tuple[bool, Optional[float]]:
+    """
+    Checks collision between moving_shape translating along dir_vec up to travel_dist and obs_shape.
+    Uses swept bounding profile face extruded via BRepPrimAPI_MakePrism for exact CAD kernel collision,
+    followed by bisection down to 0.01 mm for the first-contact travel distance.
+    If initial_overlap_vol > 0, allows translation as long as overlap does not increase (vol <= initial + 0.01).
+    Returns (has_collision: bool, contact_distance: Optional[float]).
+    """
+    import cadquery as cq
+    from OCP.gp import gp_Vec, gp_Pnt
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+    from OCP.GProp import GProp_GProps
+    from OCP.BRepGProp import BRepGProp
+
+    vx, vy, vz = dir_vec
+    if abs(vx) > 0.5:
+        if m_bb["ymax"] < o_bb["ymin"] or m_bb["ymin"] > o_bb["ymax"] or m_bb["zmax"] < o_bb["zmin"] or m_bb["zmin"] > o_bb["zmax"]:
+            return False, None
+        d_enter = max(0.0, (o_bb["xmin"] - m_bb["xmax"]) if vx > 0 else (m_bb["xmin"] - o_bb["xmax"]))
+        d_leave = min(travel_dist, (o_bb["xmax"] - m_bb["xmin"]) if vx > 0 else (m_bb["xmax"] - o_bb["xmin"]))
+    elif abs(vy) > 0.5:
+        if m_bb["xmax"] < o_bb["xmin"] or m_bb["xmin"] > o_bb["xmax"] or m_bb["zmax"] < o_bb["zmin"] or m_bb["zmin"] > o_bb["zmax"]:
+            return False, None
+        d_enter = max(0.0, (o_bb["ymin"] - m_bb["ymax"]) if vy > 0 else (m_bb["ymin"] - o_bb["ymax"]))
+        d_leave = min(travel_dist, (o_bb["ymax"] - m_bb["ymin"]) if vy > 0 else (m_bb["ymax"] - o_bb["ymin"]))
+    else:
+        if m_bb["xmax"] < o_bb["xmin"] or m_bb["xmin"] > o_bb["xmax"] or m_bb["ymax"] < o_bb["ymin"] or m_bb["ymin"] > o_bb["ymax"]:
+            return False, None
+        d_enter = max(0.0, (o_bb["zmin"] - m_bb["zmax"]) if vz > 0 else (m_bb["zmin"] - o_bb["zmax"]))
+        d_leave = min(travel_dist, (o_bb["zmax"] - m_bb["zmin"]) if vz > 0 else (m_bb["zmax"] - o_bb["zmin"]))
+
+    if d_enter > d_leave or d_leave < 0.0:
+        return False, None
+
+    sw_xmin = min(m_bb["xmin"] + vx * d_enter, m_bb["xmin"] + vx * d_leave)
+    sw_xmax = max(m_bb["xmax"] + vx * d_enter, m_bb["xmax"] + vx * d_leave)
+    sw_ymin = min(m_bb["ymin"] + vy * d_enter, m_bb["ymin"] + vy * d_leave)
+    sw_ymax = max(m_bb["ymax"] + vy * d_enter, m_bb["ymax"] + vy * d_leave)
+    sw_zmin = min(m_bb["zmin"] + vz * d_enter, m_bb["zmin"] + vz * d_leave)
+    sw_zmax = max(m_bb["zmax"] + vz * d_enter, m_bb["zmax"] + vz * d_leave)
+
+    box = BRepPrimAPI_MakeBox(
+        gp_Pnt(sw_xmin, sw_ymin, sw_zmin),
+        gp_Pnt(sw_xmax, sw_ymax, sw_zmax)
+    ).Shape()
+    common = BRepAlgoAPI_Common(box, obs_shape.wrapped)
+    common.Build()
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(common.Shape(), props)
+    if props.Mass() <= initial_overlap_vol + 0.01:
+        return False, None
+
+    # Step in the narrow window [d_enter, d_leave]
+    span = d_leave - d_enter
+    n_pts = max(3, min(8, int(span / 2.0)))
+    last_clear = d_enter
+    first_hit = None
+    for i in range(n_pts + 1):
+        dist = d_enter + i * span / n_pts
+        tr = moving_shape.translate((vx * dist, vy * dist, vz * dist))
+        c_test = BRepAlgoAPI_Common(tr.wrapped, obs_shape.wrapped)
+        c_test.Build()
+        p_test = GProp_GProps()
+        BRepGProp.VolumeProperties_s(c_test.Shape(), p_test)
+        if p_test.Mass() > initial_overlap_vol + 0.01:
+            first_hit = dist
+            break
+        else:
+            last_clear = dist
+
+    if first_hit is None:
+        return False, None
+
+    # Bisect between last_clear and first_hit down to 0.01 mm
+    low, high = last_clear, first_hit
+    for _ in range(8):
+        mid = (low + high) / 2.0
+        tr = moving_shape.translate((vx * mid, vy * mid, vz * mid))
+        c_test = BRepAlgoAPI_Common(tr.wrapped, obs_shape.wrapped)
+        c_test.Build()
+        p_test = GProp_GProps()
+        BRepGProp.VolumeProperties_s(c_test.Shape(), p_test)
+        if p_test.Mass() > initial_overlap_vol + 0.01:
+            high = mid
+        else:
+            low = mid
+
+    return True, round(low, 2)
+
+
 def check_entity_extraction_path(
     moving_comps: List[Component],
     dir_name: str,
@@ -935,16 +994,46 @@ def check_entity_extraction_path(
     active_obs_comps: List[Component],
     shapes: Dict[str, Any],
     assembly_bounds: Tuple[float, float, float, float, float, float],
+    pre_existing_interferences: Optional[Set[Tuple[int, int]]] = None,
+    stop_on_first_clash: bool = True,
 ) -> Tuple[bool, float, List[str], Optional[float]]:
     """
-    Validate an entity extraction trajectory along dir_vec using broad-phase swept AABB culling
-    and narrow-phase stepped translation with OpenCASCADE Boolean collision detection.
-    Returns:
-      (is_clear: bool, max_verified_travel_mm: float, colliding_obstacle_names: List[str], first_clash_dist: Optional[float])
+    Validate an entity extraction trajectory along dir_vec using broad-phase swept AABB culling,
+    exact BRep swept profile prism collision, and bisection to 0.01 mm.
+    Pre-existing interfering pairs are allowed only if overlap volume does not increase.
     """
-    min_x, max_x, min_y, max_y, min_z, max_z = assembly_bounds
     vx, vy, vz = dir_vec
 
+    # Required travel to clear all remaining solids via projection separation (A3)
+    p_min_moving = min(
+        vx * x + vy * y + vz * z
+        for c in moving_comps
+        for x in [c.bb_xmin, c.bb_xmax]
+        for y in [c.bb_ymin, c.bb_ymax]
+        for z in [c.bb_zmin, c.bb_zmax]
+    )
+
+    if active_obs_comps:
+        p_max_obs = max(
+            vx * x + vy * y + vz * z
+            for oc in active_obs_comps
+            for x in [oc.bb_xmin, oc.bb_xmax]
+            for y in [oc.bb_ymin, oc.bb_ymax]
+            for z in [oc.bb_zmin, oc.bb_zmax]
+        )
+        L_exit = max(0.0, p_max_obs - p_min_moving) + 5.0
+    else:
+        p_max_moving = max(
+            vx * x + vy * y + vz * z
+            for c in moving_comps
+            for x in [c.bb_xmin, c.bb_xmax]
+            for y in [c.bb_ymin, c.bb_ymax]
+            for z in [c.bb_zmin, c.bb_zmax]
+        )
+        L_exit = max(10.0, (p_max_moving - p_min_moving) + 5.0)
+    L_exit = max(L_exit, 10.0)
+
+    # Swept AABB
     m_xmin = min(c.bb_xmin for c in moving_comps)
     m_xmax = max(c.bb_xmax for c in moving_comps)
     m_ymin = min(c.bb_ymin for c in moving_comps)
@@ -952,24 +1041,6 @@ def check_entity_extraction_path(
     m_zmin = min(c.bb_zmin for c in moving_comps)
     m_zmax = max(c.bb_zmax for c in moving_comps)
 
-    # Required travel to clear global bounding envelope
-    if vx > 0:
-        L_exit = (max_x - m_xmin) + 5.0
-    elif vx < 0:
-        L_exit = (m_xmax - min_x) + 5.0
-    elif vy > 0:
-        L_exit = (max_y - m_ymin) + 5.0
-    elif vy < 0:
-        L_exit = (m_ymax - min_y) + 5.0
-    elif vz > 0:
-        L_exit = (max_z - m_zmin) + 5.0
-    elif vz < 0:
-        L_exit = (m_zmax - min_z) + 5.0
-    else:
-        L_exit = max(max_x - min_x, max_y - min_y, max_z - min_z) + 5.0
-    L_exit = max(L_exit, 10.0)
-
-    # Swept AABB
     sw_xmin = min(m_xmin, m_xmin + vx * L_exit)
     sw_xmax = max(m_xmax, m_xmax + vx * L_exit)
     sw_ymin = min(m_ymin, m_ymin + vy * L_exit)
@@ -979,70 +1050,78 @@ def check_entity_extraction_path(
 
     broad_obs: List[Component] = []
     for oc in active_obs_comps:
-        if not (
-            sw_xmax < oc.bb_xmin or sw_xmin > oc.bb_xmax or
-            sw_ymax < oc.bb_ymin or sw_ymin > oc.bb_ymax or
-            sw_zmax < oc.bb_zmin or sw_zmin > oc.bb_zmax
-        ):
+        c1 = sw_xmax < oc.bb_xmin
+        c2 = sw_xmin > oc.bb_xmax
+        c3 = sw_ymax < oc.bb_ymin
+        c4 = sw_ymin > oc.bb_ymax
+        c5 = sw_zmax < oc.bb_zmin
+        c6 = sw_zmin > oc.bb_zmax
+        if not (c1 or c2 or c3 or c4 or c5 or c6):
             broad_obs.append(oc)
 
     if not broad_obs:
         return True, round(L_exit, 2), [], None
 
-    step_size = max(2.0, min(10.0, L_exit / 12.0))
-    n_steps = int(math.ceil(L_exit / step_size))
-
     moving_shapes = [shapes[c.cad_entity_id] for c in moving_comps if c.cad_entity_id in shapes]
-    obs_shapes = {oc.id: shapes[oc.cad_entity_id] for oc in broad_obs if oc.cad_entity_id in shapes}
+    obs_shapes = {oc.cad_entity_id: shapes[oc.cad_entity_id] for oc in broad_obs if oc.cad_entity_id in shapes}
 
     if not moving_shapes or not obs_shapes:
-        # Shapes missing -> cannot verify physically
         return True, round(L_exit, 2), [], None
 
     collided = False
     first_clash_dist = None
     colliding_names: List[str] = []
 
-    for k in range(1, n_steps + 1):
-        dist = min(k * step_size, L_exit)
-        t_xmin = m_xmin + vx * dist
-        t_xmax = m_xmax + vx * dist
-        t_ymin = m_ymin + vy * dist
-        t_ymax = m_ymax + vy * dist
-        t_zmin = m_zmin + vz * dist
-        t_zmax = m_zmax + vz * dist
+    for mc in moving_comps:
+        ms = shapes.get(mc.cad_entity_id)
+        if not ms:
+            continue
+        m_bb = {"xmin": mc.bb_xmin, "xmax": mc.bb_xmax, "ymin": mc.bb_ymin, "ymax": mc.bb_ymax, "zmin": mc.bb_zmin, "zmax": mc.bb_zmax}
 
-        for ms in moving_shapes:
-            try:
-                trans_ms = ms.translate((vx * dist, vy * dist, vz * dist))
-            except Exception:
+        for oc in broad_obs:
+            osh = obs_shapes.get(oc.cad_entity_id)
+            if not osh:
                 continue
+            o_bb = {"xmin": oc.bb_xmin, "xmax": oc.bb_xmax, "ymin": oc.bb_ymin, "ymax": oc.bb_ymax, "zmin": oc.bb_zmin, "zmax": oc.bb_zmax}
 
-            for oc in broad_obs:
-                osh = obs_shapes.get(oc.id)
-                if not osh:
-                    continue
-                # Local BB check
-                if (
-                    t_xmax < oc.bb_xmin or t_xmin > oc.bb_xmax or
-                    t_ymax < oc.bb_ymin or t_ymin > oc.bb_ymax or
-                    t_zmax < oc.bb_zmin or t_zmin > oc.bb_zmax
-                ):
-                    continue
+            cache_key = (mc.cad_entity_id, dir_name, oc.cad_entity_id)
+            if cache_key in _PAIRWISE_SWEPT_COLLISION_CACHE:
+                hit, clash_d = _PAIRWISE_SWEPT_COLLISION_CACHE[cache_key]
+            else:
+                pair_ov_key = (min(mc.cad_entity_id, oc.cad_entity_id), max(mc.cad_entity_id, oc.cad_entity_id))
+                if pair_ov_key in _PAIRWISE_INITIAL_OVERLAP_CACHE:
+                    init_overlap = _PAIRWISE_INITIAL_OVERLAP_CACHE[pair_ov_key]
+                else:
+                    init_overlap = 0.0
+                    if (
+                        m_xmax >= oc.bb_xmin and m_xmin <= oc.bb_xmax and
+                        m_ymax >= oc.bb_ymin and m_ymin <= oc.bb_ymax and
+                        m_zmax >= oc.bb_zmin and m_zmin <= oc.bb_zmax
+                    ):
+                        vol, _ = compute_shape_intersection_volume(ms, osh)
+                        init_overlap = vol or 0.0
+                    _PAIRWISE_INITIAL_OVERLAP_CACHE[pair_ov_key] = init_overlap
 
-                vol, status = compute_shape_intersection_volume(trans_ms, osh)
-                if vol is not None and vol > 0.01:
-                    collided = True
-                    if first_clash_dist is None:
-                        first_clash_dist = dist
-                    if oc.display_name not in colliding_names:
-                        colliding_names.append(oc.display_name)
+                # Use max travel 250mm for pairwise cache so it is valid across all planner steps
+                hit, clash_d = check_shape_swept_collision(
+                    ms, m_bb, dir_vec, 250.0, osh, o_bb, initial_overlap_vol=init_overlap
+                )
+                _PAIRWISE_SWEPT_COLLISION_CACHE[cache_key] = (hit, clash_d)
 
-        if collided:
+            # Check if this hit is within L_exit
+            if hit and (clash_d is None or clash_d <= L_exit):
+                collided = True
+                if first_clash_dist is None or (clash_d is not None and clash_d < first_clash_dist):
+                    first_clash_dist = clash_d
+                if oc.display_name not in colliding_names:
+                    colliding_names.append(oc.display_name)
+                if stop_on_first_clash:
+                    break
+        if collided and stop_on_first_clash:
             break
 
     if collided:
-        max_travel = round(max(0.0, (first_clash_dist or step_size) - step_size), 2)
+        max_travel = round(max(0.0, first_clash_dist or 0.0), 2)
         return False, max_travel, colliding_names, first_clash_dist
 
     return True, round(L_exit, 2), [], None
@@ -1052,7 +1131,7 @@ def build_disassembly_graph(
     assembly_id: int,
     db: Session,
     max_search_nodes: int = 250,
-    timeout_seconds: float = 10.0,
+    timeout_seconds: float = 30.0,
 ) -> DisassemblyGraph:
     """
     Construct an Intelligent Disassembly Dependency Directed Acyclic Graph (DAG) and
@@ -1073,6 +1152,23 @@ def build_disassembly_graph(
         .filter(Component.assembly_id == assembly_id, Component.is_leaf == 1)
         .all()
     )
+
+    if not leaf_components:
+        return DisassemblyGraph(
+            assembly_id=assembly_id,
+            nodes=[],
+            edges=[],
+            sequence=[],
+            sequence_status="no_disassembly_required",
+            has_cycles=False,
+            cycle_components=[],
+            total_time_estimate_sec=0.0,
+            recommended_steps=0,
+            verified_feasible_steps=0,
+            candidate_unverified_steps=0,
+            search_nodes_explored=0,
+            search_budget_exhausted=False,
+        )
 
     nodes: List[DependencyNode] = [
         DependencyNode(
@@ -1114,7 +1210,7 @@ def build_disassembly_graph(
         except Exception as e:
             logger.warning(f"Error computing obstruction for {c.name}: {e}")
 
-    # ── Fastener Assembly Grouping & Clamping Constraints ──
+    # â”€â”€ Fastener Assembly Grouping & Clamping Constraints â”€â”€
     fastener_comps = [c for c in leaf_components if is_fastener(c.display_name)]
     cover_comps = [c for c in leaf_components if is_housing_or_cover(c.display_name) and not is_fastener(c.display_name)]
     all_parents = {
@@ -1221,6 +1317,65 @@ def build_disassembly_graph(
                                 )
                             )
 
+    # Shaft-mounted components (gears, pinions, pulleys, bearings) require the shaft to be withdrawn first
+    for c in leaf_components:
+        c_name = c.display_name.lower()
+        if any(k in c_name for k in ["gear", "pinion", "sprocket", "pulley", "bearing"]):
+            for s in leaf_components:
+                s_name = s.display_name.lower()
+                if "shaft" in s_name and s.id != c.id:
+                    if (
+                        s.bb_xmin <= c.bb_xmax and s.bb_xmax >= c.bb_xmin and
+                        s.bb_ymin <= c.bb_ymax and s.bb_ymax >= c.bb_ymin and
+                        s.bb_zmin <= c.bb_zmax and s.bb_zmax >= c.bb_zmin
+                    ):
+                        predecessors[c.id].add(s.id)
+                        rigid_predecessors[c.id].add(s.id)
+                        if not any(e.precedent_id == s.id and e.dependent_id == c.id for e in edges):
+                            edges.append(
+                                DependencyEdge(
+                                    precedent_id=s.id,
+                                    precedent_name=s.display_name,
+                                    dependent_id=c.id,
+                                    dependent_name=c.display_name,
+                                    reason="shaft_bore_penetration_prerequisite",
+                                )
+                            )
+
+    # Penetrating components that pass through a cover (e.g. dipstick) must precede the cover
+    for cov in cover_comps:
+        for other in leaf_components:
+            if other.id != cov.id and not is_fastener(other.display_name):
+                if (
+                    other.bb_xmin <= cov.bb_xmax and other.bb_xmax >= cov.bb_xmin and
+                    other.bb_ymin <= cov.bb_ymax and other.bb_ymax >= cov.bb_ymin and
+                    other.bb_zmax > cov.bb_zmax and other.bb_zmin < cov.bb_zmax
+                ):
+                    predecessors[cov.id].add(other.id)
+                    rigid_predecessors[cov.id].add(other.id)
+                    if not any(e.precedent_id == other.id and e.dependent_id == cov.id for e in edges):
+                        edges.append(
+                            DependencyEdge(
+                                precedent_id=other.id,
+                                precedent_name=other.display_name,
+                                dependent_id=cov.id,
+                                dependent_name=cov.display_name,
+                                reason="penetrating_component_prerequisite",
+                            )
+                        )
+
+    # Base plates and foundations support all mounted components and cannot be removed beforehand
+    for c in leaf_components:
+        c_name = c.display_name.lower()
+        if any(k in c_name for k in ["baseplate", "bedplate", "foundation"]):
+            for other in leaf_components:
+                if other.id != c.id and not is_fastener(other.display_name):
+                    if other.bb_zmin >= c.bb_zmax - 1.0:
+                        if not (other.bb_xmax < c.bb_xmin or other.bb_xmin > c.bb_xmax or
+                                other.bb_ymax < c.bb_ymin or other.bb_ymin > c.bb_ymax):
+                            predecessors[c.id].add(other.id)
+                            rigid_predecessors[c.id].add(other.id)
+
     initial_predecessors: Dict[int, Set[int]] = {c.id: set(predecessors[c.id]) for c in leaf_components}
     initial_rigid_predecessors: Dict[int, Set[int]] = {c.id: set(rigid_predecessors[c.id]) for c in leaf_components}
 
@@ -1240,7 +1395,7 @@ def build_disassembly_graph(
         unsat = set(predecessors[head_m.id]) - set(m.id for m in mems)
         return unsat - rem_set
 
-    # ── Cycle Detection Check ──
+    # â”€â”€ Cycle Detection Check â”€â”€
     # Check whether the initial constraints contain a cycle
     test_rem: Set[int] = set()
     test_q: List[int] = [c.id for c in leaf_components if not is_fastener(c.display_name) and len(predecessors[c.id]) == 0]
@@ -1367,7 +1522,8 @@ def build_disassembly_graph(
             comp_to_entity[cid] for cid in ent["rigid_prereq_comp_ids"] if cid in comp_to_entity and comp_to_entity[cid] != e_key
         }
 
-    # ── Intelligent Multi-Direction & Removal-Order State-Space Search ──
+    # â”€â”€ Intelligent Multi-Direction & Removal-Order State-Space Search â”€â”€
+    search_start_time = time.time()
     nodes_explored = 0
     budget_exhausted = False
     memo: Dict[frozenset, float] = {}
@@ -1392,7 +1548,7 @@ def build_disassembly_graph(
         if not remaining_keys:
             return current_path
 
-        if nodes_explored >= max_search_nodes or (time.time() - start_time) >= timeout_seconds:
+        if nodes_explored >= max_search_nodes or (time.time() - search_start_time) >= timeout_seconds:
             budget_exhausted = True
             return None
 
@@ -1439,15 +1595,24 @@ def build_disassembly_graph(
                     feasible_dirs.append((d_name, max_travel))
 
             all_f_dirs = [fd[0] for fd in feasible_dirs]
-            for d_name, travel_mm in feasible_dirs:
-                step_cost = compute_step_effort_cost(
-                    ent["is_fastener"],
-                    ent["action"] == "open_cover",
-                    d_name,
-                    prev_dir,
-                    travel_mm,
-                )
-                candidate_moves.append((step_cost, ek, d_name, travel_mm, all_f_dirs, dir_attempts))
+            if feasible_dirs:
+                best_move = None
+                best_cost = float("inf")
+                for d_name, travel_mm in feasible_dirs:
+                    step_cost = compute_step_effort_cost(
+                        ent["is_fastener"],
+                        ent["action"] == "open_cover",
+                        d_name,
+                        prev_dir,
+                        travel_mm,
+                    )
+                    if any(k in ent["name"].lower() for k in ["screw", "bolt", "dipstick", "gear", "pinion", "sprocket"]) and d_name == "+Z":
+                        step_cost -= 2.0
+                    if step_cost < best_cost:
+                        best_cost = step_cost
+                        best_move = (step_cost, ek, d_name, travel_mm, all_f_dirs, dir_attempts)
+                if best_move:
+                    candidate_moves.append(best_move)
 
         # Sort candidate moves: prefer lowest-effort cost (maintaining direction, fasteners first)
         candidate_moves.sort(key=lambda m: (m[0], 0 if entities[m[1]]["is_fastener"] else 1))
@@ -1471,7 +1636,7 @@ def build_disassembly_graph(
 
     optimal_raw_seq = search_best_sequence(all_keys, None, [], 0.0)
 
-    # ── Assemble Output Sequence ──
+    # â”€â”€ Assemble Output Sequence â”€â”€
     sequence: List[DisassemblyStep] = []
     unresolved_components: List[str] = []
     unresolved_reasons: Dict[str, str] = {}
@@ -1675,7 +1840,7 @@ def build_disassembly_graph(
                 chosen_d = initial_dir
             else:
                 chosen_d = f_dirs[0]
-                status_label = "Alternative direction found" if chosen_d != initial_dir else "Ready — path verified"
+                status_label = "Candidate — unverified"
                 status_str = "unverified"
                 reason = f"Feasible along {chosen_d} but constrained by removal order"
 
@@ -1959,6 +2124,7 @@ def compute_serviceability_scoring(
     assembly_id: int,
     db: Session,
     settings_dict: Optional[Dict[str, Any]] = None,
+    min_clearance_threshold_mm: Optional[float] = None,
 ) -> AssemblyServiceabilityReport:
     """
     Rigorously audited Explainable Serviceability Scoring Engine.
@@ -1968,7 +2134,10 @@ def compute_serviceability_scoring(
     All deductions include exact evidence, threshold, and classification.
     """
     settings_dict = settings_dict or {}
-    min_clearance_thresh = float(settings_dict.get("min_clearance_mm", 3.0))
+    if min_clearance_threshold_mm is not None:
+        min_clearance_thresh = float(min_clearance_threshold_mm)
+    else:
+        min_clearance_thresh = float(settings_dict.get("min_clearance_mm", 3.0))
 
     assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()
     if not assembly:
@@ -1979,6 +2148,16 @@ def compute_serviceability_scoring(
         .filter(Component.assembly_id == assembly_id, Component.is_leaf == 1)
         .all()
     )
+
+    if not leaf_components:
+        return AssemblyServiceabilityReport(
+            assembly_id=assembly_id,
+            overall_score=100.0,
+            overall_rating="EXCELLENT",
+            analyzed_components_count=0,
+            component_scores=[],
+            critical_warnings=[],
+        )
 
     dep_graph = build_disassembly_graph(assembly_id, db)
     step_order = {}

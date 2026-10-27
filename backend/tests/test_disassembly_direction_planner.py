@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Regression tests for Direction-Aware Disassembly Sequence Planner (Milestone 2 Refinement).
 
@@ -71,7 +72,7 @@ def test_1_blocked_plus_x_selects_alternative_direction(direction_db):
     assert cover_step.is_path_verified is True
     assert cover_step.removal_direction == "-X" or cover_step.removal_direction in ["-X", "+Y", "-Y", "+Z", "-Z"]
     assert cover_step.removal_direction != "+X"
-    assert cover_step.status_label in ["Alternative direction found", "Ready — path verified"]
+    assert cover_step.status_label in ["Alternative direction found", "Ready \u2014 path verified"]
     assert len(cover_step.direction_attempts) == 6
 
     # Verify +X attempt failed
@@ -205,7 +206,7 @@ def test_4_fastener_removal_updates_obstacle_set(direction_db):
     # Once fastener is gone, cover extraction along +Z is verified collision-free
     assert cover_step.is_path_verified is True
     assert cover_step.removal_direction == "+Z"
-    assert cover_step.status_label == "Ready — path verified"
+    assert cover_step.status_label == "Ready \u2014 path verified"
 
 
 def test_5_solvable_dependency_cycle_resolved(direction_db):

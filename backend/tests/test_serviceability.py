@@ -43,7 +43,7 @@ def test_db():
     app.dependency_overrides[get_db] = override_get_db
 
     # Ingest sample_serviceability_assembly
-    step_path_1 = Path("test_data/sample_serviceability_assembly.step")
+    step_path_1 = Path("test_data/sample_serviceability_assembly.step") if Path("test_data/sample_serviceability_assembly.step").exists() else Path("backend/test_data/sample_serviceability_assembly.step")
     res1 = import_step_file(step_path_1)
     a1 = Assembly(
         filename="sample_serviceability_assembly.step",
@@ -71,7 +71,7 @@ def test_db():
     db.commit()
 
     # Ingest sample_gearbox_serviceability
-    step_path_2 = Path("test_data/sample_gearbox_serviceability.step")
+    step_path_2 = Path("test_data/sample_gearbox_serviceability.step") if Path("test_data/sample_gearbox_serviceability.step").exists() else Path("backend/test_data/sample_gearbox_serviceability.step")
     if step_path_2.exists():
         res2 = import_step_file(step_path_2)
         a2 = Assembly(

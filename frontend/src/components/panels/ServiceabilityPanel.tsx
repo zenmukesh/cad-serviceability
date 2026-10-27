@@ -693,17 +693,17 @@ export default function ServiceabilityPanel() {
                     const isSelected = selectedComponentId === step.component_id
                     const isExpanded = expandedStep === step.step_number
 
-                    // Distinct 5-state status classification
-                    const statusText =
-                      step.status_label ||
-                      (step.path_validation_status === 'verified'
-                        ? 'Ready — path verified'
-                        : step.path_validation_status === 'cyclic'
-                        ? 'Unresolved dependency cycle'
-                        : step.path_validation_status === 'blocked' ||
-                          step.path_validation_status === 'collision_detected'
-                        ? 'No feasible straight-line path found'
-                        : 'Prerequisite required')
+                    // Distinct status classification strictly enforcing verified vs unverified
+                    const statusText = !step.is_path_verified
+                      ? (step.status_label && !step.status_label.includes('verified') && !step.status_label.includes('found')
+                          ? step.status_label
+                          : (step.path_validation_status === 'cyclic'
+                              ? 'Unresolved dependency cycle'
+                              : step.path_validation_status === 'blocked' ||
+                                step.path_validation_status === 'collision_detected'
+                              ? 'No feasible straight-line path found'
+                              : 'Candidate — unverified'))
+                      : (step.status_label || 'Ready — path verified')
 
                     const statusStyle =
                       statusText === 'Ready — path verified'
@@ -714,6 +714,8 @@ export default function ServiceabilityPanel() {
                         ? 'bg-amber-950/80 text-amber-400 border-amber-600/40'
                         : statusText === 'No feasible straight-line path found'
                         ? 'bg-rose-950/80 text-rose-400 border-rose-600/40'
+                        : statusText === 'Candidate — unverified'
+                        ? 'bg-slate-900 text-slate-300 border-slate-700'
                         : 'bg-purple-950/80 text-purple-400 border-purple-600/40'
 
                     return (
@@ -766,7 +768,7 @@ export default function ServiceabilityPanel() {
                         <div className="flex items-center justify-between text-[10px] text-slate-400 pl-7">
                           <span>
                             {step.action.replace('_', ' ').toUpperCase()} •{' '}
-                            {step.max_verified_travel_mm != null
+                            {step.max_verified_travel_mm != null && step.is_path_verified
                               ? `${step.max_verified_travel_mm.toFixed(1)} mm travel`
                               : 'No travel verified'}
                           </span>
