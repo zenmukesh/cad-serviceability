@@ -201,3 +201,42 @@ export interface AssemblyServiceabilityReport {
   general_recommendations: string[]
   settings: Record<string, any>
 }
+
+// ─── Multi-Axis Sectioning (Phase D) ────────────────────────────────────────
+
+export interface ComponentSectionOutline {
+  component_id: number
+  component_name: string
+  area_mm2: number
+  outlines: number[][][]
+}
+
+export interface SectionClearanceResult {
+  component_a_id: number
+  component_b_id: number
+  component_a_name: string
+  component_b_name: string
+  clearance_mm: number
+  point_a: [number, number, number]
+  point_b: [number, number, number]
+}
+
+export interface AssemblySectionResponse {
+  assembly_id: number
+  plane_point: [number, number, number]
+  plane_normal: [number, number, number]
+  total_cut_area_mm2: number
+  component_sections: ComponentSectionOutline[]
+  clearance: SectionClearanceResult | null
+}
+
+export interface SectionPlaneConfig {
+  id: number
+  enabled: boolean
+  point: [number, number, number]
+  normal: [number, number, number]
+  offset: number
+  flipped: boolean
+  label?: string
+}
+

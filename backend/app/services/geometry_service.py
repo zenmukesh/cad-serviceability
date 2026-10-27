@@ -1162,12 +1162,12 @@ def check_entity_extraction_path(
                 continue
             o_bb = {"xmin": oc.bb_xmin, "xmax": oc.bb_xmax, "ymin": oc.bb_ymin, "ymax": oc.bb_ymax, "zmin": oc.bb_zmin, "zmax": oc.bb_zmax}
 
-            assy_id = getattr(mc, 'assembly_id', 0)
-            cache_key = (assy_id, mc.cad_entity_id, dir_name, oc.cad_entity_id)
+            shapes_key = id(shapes)
+            cache_key = (shapes_key, mc.cad_entity_id, dir_name, oc.cad_entity_id)
             if cache_key in _PAIRWISE_SWEPT_COLLISION_CACHE:
                 hit, clash_d = _PAIRWISE_SWEPT_COLLISION_CACHE[cache_key]
             else:
-                pair_ov_key = (assy_id, min(mc.cad_entity_id, oc.cad_entity_id), max(mc.cad_entity_id, oc.cad_entity_id))
+                pair_ov_key = (shapes_key, min(mc.cad_entity_id, oc.cad_entity_id), max(mc.cad_entity_id, oc.cad_entity_id))
                 if pair_ov_key in _PAIRWISE_INITIAL_OVERLAP_CACHE:
                     init_overlap = _PAIRWISE_INITIAL_OVERLAP_CACHE[pair_ov_key]
                 else:

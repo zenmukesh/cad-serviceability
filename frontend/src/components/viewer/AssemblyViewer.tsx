@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { getComponentMesh } from '../../api/client'
 import { useAssemblyStore } from '../../store/assemblyStore'
 import type { MeshData, Component } from '../../types/assembly'
+import type { ComponentSectionOutline } from '../../types/serviceability'
 import FreedomSphere from './FreedomSphere'
 
 // ─── Mesh cache ──────────────────────────────────────────────────────────────
@@ -19,7 +20,8 @@ interface ComponentMeshProps {
   isXRay: boolean
   isVisible: boolean
   displacement: [number, number, number]
-  clippingPlane: THREE.Plane | null
+  clippingPlanes: THREE.Plane[]
+  clipIntersection: boolean
   onSelect: (id: number) => void
 }
 
@@ -31,7 +33,8 @@ function ComponentMesh({
   isXRay,
   isVisible,
   displacement,
-  clippingPlane,
+  clippingPlanes,
+  clipIntersection,
   onSelect,
 }: ComponentMeshProps) {
   const meshRef = useRef<THREE.Mesh>(null)
@@ -115,8 +118,6 @@ function ComponentMesh({
     depthWrite = false
   }
 
-  const clippingPlanes = clippingPlane ? [clippingPlane] : []
-
   return (
     <group position={displacement}>
       <mesh
@@ -143,6 +144,7 @@ function ComponentMesh({
           opacity={opacity}
           depthWrite={depthWrite}
           clippingPlanes={clippingPlanes}
+          clipIntersection={clipIntersection}
         />
       </mesh>
     </group>
@@ -265,6 +267,73 @@ function AccessVectorOverlay({
   )
 }
 
+// ─── Exact BREP Cross-Section Outlines (Phase D) ───────────────────────────
+function BrepSectionOutlinesOverlay({
+  sections,
+}: {
+  sections: ComponentSectionOutline[]
+}) {
+  const lineGeometries = useMemo(() => {
+    const geos: THREE.BufferGeometry[] = []
+    for (const sec of sections) {
+      for (const poly of sec.outlines) {
+        if (poly.length >= 2) {
+          const pts = poly.map((p) => new THREE.Vector3(p[0], p[1], p[2]))
+          geos.push(new THREE.BufferGeometry().setFromPoints(pts))
+        }
+      }
+    }
+    return geos
+  }, [sections])
+
+  return (
+    <group>
+      {lineGeometries.map((geo, idx) => (
+        // @ts-ignore
+        <line key={idx} geometry={geo}>
+          <lineBasicMaterial color="#06b6d4" linewidth={3} />
+        </line>
+      ))}
+    </group>
+  )
+}
+
+// ─── Multi-Plane Solid Cap Faces (Phase D) ──────────────────────────────────
+function SectionCapPlanes({
+  planes,
+  clipIntersection,
+}: {
+  planes: THREE.Plane[]
+  clipIntersection: boolean
+}) {
+  return (
+    <group>
+      {planes.map((pln, i) => {
+        const otherPlanes = planes.filter((_, idx) => idx !== i)
+        const pos = pln.normal.clone().multiplyScalar(-pln.constant)
+        const quat = new THREE.Quaternion()
+        quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), pln.normal.clone().negate())
+
+        return (
+          <mesh key={i} position={pos} quaternion={quat}>
+            <planeGeometry args={[450, 450]} />
+            <meshStandardMaterial
+              color="#475569"
+              side={THREE.DoubleSide}
+              clippingPlanes={otherPlanes}
+              clipIntersection={clipIntersection}
+              roughness={0.6}
+              metalness={0.2}
+              opacity={0.88}
+              transparent={true}
+            />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
 // Helper to check if a component is or descends from an isolated component ID
 function isDescendantOf(
   comp: Component,
@@ -303,6 +372,10 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
     explodeFactor,
     sectionPlaneAxis,
     sectionPlaneOffset,
+    sectionPlanes,
+    sectionCombinedMode,
+    showSectionCaps,
+    activeSectionResult,
     obstructingComponentIds,
     activeClearanceLine,
     activeAccessVector,
@@ -396,19 +469,46 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
     return map
   }, [components, assemblyCenter, explodeFactor, stepDirections])
 
-  // Construct section clipping plane (mapped from CAD Z-up to Three.js Y-up)
-  const clippingPlane = useMemo(() => {
-    if (sectionPlaneAxis === 'off') return null
-    let normal = new THREE.Vector3(0, -1, 0)
-    if (sectionPlaneAxis === '+X') normal = new THREE.Vector3(-1, 0, 0)
-    else if (sectionPlaneAxis === '-X') normal = new THREE.Vector3(1, 0, 0)
-    else if (sectionPlaneAxis === '+Y') normal = new THREE.Vector3(0, 0, 1)
-    else if (sectionPlaneAxis === '-Y') normal = new THREE.Vector3(0, 0, -1)
-    else if (sectionPlaneAxis === '+Z') normal = new THREE.Vector3(0, -1, 0)
-    else if (sectionPlaneAxis === '-Z') normal = new THREE.Vector3(0, 1, 0)
+  // Construct multi-axis section clipping planes (mapped from CAD Z-up to Three.js Y-up)
+  const activeClippingPlanes = useMemo(() => {
+    const planes: THREE.Plane[] = []
+    if (sectionPlanes && sectionPlanes.length > 0) {
+      for (const p of sectionPlanes) {
+        if (!p.enabled) continue
+        let nx = p.normal[0]
+        let ny = p.normal[1]
+        let nz = p.normal[2]
+        if (p.flipped) {
+          nx = -nx
+          ny = -ny
+          nz = -nz
+        }
+        // Map CAD (x, y, z) where Z is up to Three.js coordinates
+        // Under group rotation [-Math.PI / 2, 0, 0]:
+        // (x_cad, y_cad, z_cad) -> (x_cad, z_cad, -y_cad)
+        const tNormal = new THREE.Vector3(nx, nz, -ny).normalize()
+        const px = p.point[0] + nx * p.offset
+        const py = p.point[1] + ny * p.offset
+        const pz = p.point[2] + nz * p.offset
+        const tPoint = new THREE.Vector3(px, pz, -py)
+        const constant = -tNormal.dot(tPoint)
+        planes.push(new THREE.Plane(tNormal, constant))
+      }
+    }
 
-    return new THREE.Plane(normal, -sectionPlaneOffset)
-  }, [sectionPlaneAxis, sectionPlaneOffset])
+    if (planes.length === 0 && sectionPlaneAxis !== 'off') {
+      let normal = new THREE.Vector3(0, -1, 0)
+      if (sectionPlaneAxis === '+X') normal = new THREE.Vector3(-1, 0, 0)
+      else if (sectionPlaneAxis === '-X') normal = new THREE.Vector3(1, 0, 0)
+      else if (sectionPlaneAxis === '+Y') normal = new THREE.Vector3(0, 0, 1)
+      else if (sectionPlaneAxis === '-Y') normal = new THREE.Vector3(0, 0, -1)
+      else if (sectionPlaneAxis === '+Z') normal = new THREE.Vector3(0, -1, 0)
+      else if (sectionPlaneAxis === '-Z') normal = new THREE.Vector3(0, 1, 0)
+      planes.push(new THREE.Plane(normal, -sectionPlaneOffset))
+    }
+
+    return planes
+  }, [sectionPlanes, sectionPlaneAxis, sectionPlaneOffset])
 
   // Filter visible components considering isolation and hidden sets (including hierarchy)
   const visibleLeafComponents = useMemo(() => {
@@ -488,11 +588,35 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
                 isXRay={isXRayMode && isHousingCover}
                 isVisible={true}
                 displacement={displacements.get(comp.id) || [0, 0, 0]}
-                clippingPlane={clippingPlane}
+                clippingPlanes={activeClippingPlanes}
+                clipIntersection={sectionCombinedMode === 'intersection'}
                 onSelect={selectComponent}
               />
             )
           })}
+
+          {/* Multi-Plane Solid Caps (Phase D) */}
+          {showSectionCaps && activeClippingPlanes.length > 0 && (
+            <SectionCapPlanes
+              planes={activeClippingPlanes}
+              clipIntersection={sectionCombinedMode === 'intersection'}
+            />
+          )}
+
+          {/* Exact Analytical BREP Section Outlines (Phase D) */}
+          {activeSectionResult && activeSectionResult.component_sections.length > 0 && (
+            <BrepSectionOutlinesOverlay sections={activeSectionResult.component_sections} />
+          )}
+
+          {/* Section Plane Clearance Dimension Line (Phase D) */}
+          {activeSectionResult?.clearance && (
+            <ClearanceLineOverlay
+              p1={activeSectionResult.clearance.point_a}
+              p2={activeSectionResult.clearance.point_b}
+              dist={activeSectionResult.clearance.clearance_mm}
+              label={`Section Clearance: ${activeSectionResult.clearance.clearance_mm.toFixed(3)} mm (${activeSectionResult.clearance.component_a_name} - ${activeSectionResult.clearance.component_b_name})`}
+            />
+          )}
 
           {/* Milestone 2 Phase 6: 3D Visual Findings Overlays */}
           {activeClearanceLine && (

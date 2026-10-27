@@ -23,6 +23,8 @@ from app.schemas.serviceability import (
     ComponentObstructionReport,
     DisassemblyGraph,
     AssemblyServiceabilityReport,
+    SectionPlaneRequest,
+    AssemblySectionResponse,
 )
 from app.services.geometry_service import (
     analyze_clearances,
@@ -30,6 +32,7 @@ from app.services.geometry_service import (
     build_disassembly_graph,
     compute_serviceability_scoring,
 )
+from app.services.section_service import compute_assembly_section
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["serviceability"])
@@ -170,3 +173,32 @@ def get_dependency_graph(
     except Exception as e:
         logger.exception(f"Error building dependency graph for assembly {assembly_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Dependency graph generation failed: {str(e)}")
+
+
+@router.post(
+    "/assemblies/{assembly_id}/section",
+    response_model=AssemblySectionResponse,
+    summary="Compute exact BREP multi-axis cross-section outlines, areas, and clearance",
+)
+def get_assembly_section(
+    assembly_id: int,
+    request: SectionPlaneRequest,
+    db: Session = Depends(get_db),
+):
+    assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()
+    if not assembly:
+        raise HTTPException(status_code=404, detail=f"Assembly {assembly_id} not found")
+
+    try:
+        return compute_assembly_section(
+            assembly_id=assembly_id,
+            plane_point=request.point,
+            plane_normal=request.normal,
+            db=db,
+            component_ids=request.component_ids,
+            measure_clearance_between=request.measure_clearance_between,
+        )
+    except Exception as e:
+        logger.exception(f"Error computing section for assembly {assembly_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Section computation failed: {str(e)}")
+

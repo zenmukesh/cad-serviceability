@@ -13,6 +13,8 @@ import {
 } from 'lucide-react'
 import { useAssemblyStore } from '../../store/assemblyStore'
 
+import { MultiAxisSectionControls } from './MultiAxisSectionControls'
+
 interface ViewerControlsProps {
   onFitView: () => void
   onToggleGrid: () => void
@@ -64,9 +66,7 @@ export default function ViewerControls({ onFitView, onToggleGrid, showGrid }: Vi
     explodeFactor,
     setExplodeFactor,
     sectionPlaneAxis,
-    setSectionPlaneAxis,
-    sectionPlaneOffset,
-    setSectionPlaneOffset,
+    sectionPlanes,
     activeClearanceLine,
     activeAccessVector,
     obstructingComponentIds,
@@ -74,6 +74,7 @@ export default function ViewerControls({ onFitView, onToggleGrid, showGrid }: Vi
   } = useAssemblyStore()
 
   const [showSectionOptions, setShowSectionOptions] = useState(false)
+  const isSectionActive = sectionPlanes.some((p) => p.enabled) || sectionPlaneAxis !== 'off'
 
   const handleIsolate = () => {
     if (selectedComponentId != null) {
@@ -181,63 +182,17 @@ export default function ViewerControls({ onFitView, onToggleGrid, showGrid }: Vi
         {/* Section View / Clipping Plane */}
         <div className="relative">
           <ToolButton
-            icon={<Scissors className="w-3.5 h-3.5" />}
-            label={`Section${sectionPlaneAxis !== 'off' ? ` (${sectionPlaneAxis})` : ''}`}
-            title="Inspect internal geometry with cross-section clipping plane"
+            icon={<Scissors className="w-3.5 h-3.5 text-cyan-400" />}
+            label={`Section${isSectionActive ? ' (Active)' : ''}`}
+            title="Multi-Axis Sectioning (D1-D4): Up to 3 arbitrary planes, presets, solid caps & BREP cut"
             onClick={() => setShowSectionOptions((o) => !o)}
-            active={sectionPlaneAxis !== 'off'}
+            active={isSectionActive}
           />
 
-          {showSectionOptions && (
-            <div className="absolute right-0 top-full mt-1 w-64 bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-2xl z-30 space-y-2">
-              <div className="flex items-center justify-between pb-1 border-b border-slate-800">
-                <span className="text-xs font-semibold text-slate-200">Section Clipping Plane</span>
-                <button
-                  onClick={() => setShowSectionOptions(false)}
-                  className="text-slate-400 hover:text-white text-xs"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="flex gap-1 flex-wrap">
-                {(['off', '+X', '-X', '+Y', '-Y', '+Z', '-Z'] as const).map((axis) => (
-                  <button
-                    key={axis}
-                    onClick={() => {
-                      setSectionPlaneAxis(axis)
-                      if (axis === 'off') setSectionPlaneOffset(0)
-                    }}
-                    className={`px-2 py-1 text-[11px] rounded font-mono font-medium transition-colors ${
-                      sectionPlaneAxis === axis
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                    }`}
-                  >
-                    {axis}
-                  </button>
-                ))}
-              </div>
-
-              {sectionPlaneAxis !== 'off' && (
-                <div className="pt-2">
-                  <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                    <span>Cut Offset:</span>
-                    <span className="font-mono text-slate-200">{sectionPlaneOffset.toFixed(1)} mm</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={-150}
-                    max={150}
-                    step={1}
-                    value={sectionPlaneOffset}
-                    onChange={(e) => setSectionPlaneOffset(parseFloat(e.target.value))}
-                    className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                  />
-                </div>
-              )}
-            </div>
-          )}
+          <MultiAxisSectionControls
+            isOpen={showSectionOptions}
+            onClose={() => setShowSectionOptions(false)}
+          />
         </div>
 
         {/* Clear Visual Findings */}

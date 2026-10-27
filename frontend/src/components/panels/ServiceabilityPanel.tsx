@@ -9,6 +9,7 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronRight,
+  Scissors,
 } from 'lucide-react'
 import { useAssemblyStore, RightPanelTab } from '../../store/assemblyStore'
 import {
@@ -17,6 +18,7 @@ import {
   getComponentObstructions,
   getComponentClearances,
   getDependencyGraph,
+  getAssemblySection,
 } from '../../api/client'
 import toast from 'react-hot-toast'
 
@@ -41,6 +43,9 @@ export default function ServiceabilityPanel() {
     setObstructingComponentIds,
     setActiveClearanceLine,
     setActiveAccessVector,
+    setSectionThroughFinding,
+    setActiveSectionResult,
+    setIsComputingSection,
   } = useAssemblyStore()
 
   const [minClearanceMm, setMinClearanceMm] = useState(3.0)
@@ -146,6 +151,78 @@ export default function ServiceabilityPanel() {
       label: `${c.target_component_name} ↔ ${c.neighbor_component_name}`,
     })
     toast.success(`Clearance: ${c.distance_mm.toFixed(2)} mm visualized in 3D`)
+  }
+
+  // Phase D (D3): Section through clearance finding
+  const handleSectionThroughClearance = async (c: any) => {
+    const p1: [number, number, number] = [c.point_on_target.x, c.point_on_target.y, c.point_on_target.z]
+    const p2: [number, number, number] = [c.point_on_neighbor.x, c.point_on_neighbor.y, c.point_on_neighbor.z]
+    const sep = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]]
+    const mag = Math.sqrt(sep[0] ** 2 + sep[1] ** 2 + sep[2] ** 2)
+    let normal: [number, number, number] = [0, 0, 1]
+    if (mag > 1e-4) {
+      normal = [sep[0] / mag, sep[1] / mag, sep[2] / mag]
+    } else if (c.removal_direction_vector) {
+      normal = c.removal_direction_vector
+    }
+
+    setSectionThroughFinding(p1, normal, `Clearance finding: ${c.target_component_name} ↔ ${c.neighbor_component_name}`)
+    toast.success(`Section plane aligned through contact points`)
+
+    if (currentAssembly) {
+      setIsComputingSection(true)
+      try {
+        const res = await getAssemblySection(currentAssembly.id, {
+          point: p1,
+          normal: normal,
+          measure_clearance_between: [c.target_component_id, c.neighbor_component_id],
+        })
+        setActiveSectionResult(res)
+      } catch (err: any) {
+        console.error('Section calculation failed:', err)
+      } finally {
+        setIsComputingSection(false)
+      }
+    }
+  }
+
+  // Phase D (D3): Section through obstruction finding
+  const handleSectionThroughObstruction = async (ob: any, dirVector?: [number, number, number]) => {
+    const targetComp = components.find((c) => c.id === selectedComponentId)
+    if (!targetComp || !targetComp.bounding_box) return
+
+    const cx = (targetComp.bounding_box.xmin + targetComp.bounding_box.xmax) / 2
+    const cy = (targetComp.bounding_box.ymin + targetComp.bounding_box.ymax) / 2
+    const cz = (targetComp.bounding_box.zmin + targetComp.bounding_box.zmax) / 2
+    const p: [number, number, number] = [cx, cy, cz]
+
+    let normal: [number, number, number] = dirVector || [0, 0, 1]
+    if (ob.nearest_point) {
+      const v = [ob.nearest_point.x - cx, ob.nearest_point.y - cy, ob.nearest_point.z - cz]
+      const mag = Math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
+      if (mag > 1e-4) {
+        normal = [v[0] / mag, v[1] / mag, v[2] / mag]
+      }
+    }
+
+    setSectionThroughFinding(p, normal, `Obstruction finding: ${ob.component_name}`)
+    toast.success(`Section plane aligned along obstruction path`)
+
+    if (currentAssembly) {
+      setIsComputingSection(true)
+      try {
+        const res = await getAssemblySection(currentAssembly.id, {
+          point: p,
+          normal: normal,
+          measure_clearance_between: selectedComponentId ? [selectedComponentId, ob.component_id] : undefined,
+        })
+        setActiveSectionResult(res)
+      } catch (err: any) {
+        console.error('Section calculation failed:', err)
+      } finally {
+        setIsComputingSection(false)
+      }
+    }
   }
 
   const scoreRatingColor = (score: number) => {
@@ -597,6 +674,14 @@ export default function ServiceabilityPanel() {
                                   >
                                     Highlight
                                   </button>
+                                  <button
+                                    onClick={() => handleSectionThroughObstruction(ob, d.direction_vector)}
+                                    className="flex items-center gap-0.5 text-[10px] text-cyan-400 hover:text-cyan-200 underline"
+                                    title="Cut a section plane through this obstruction finding"
+                                  >
+                                    <Scissors className="w-2.5 h-2.5" />
+                                    <span>Section</span>
+                                  </button>
                                 </div>
                               </div>
                             ))}
@@ -697,14 +782,24 @@ export default function ServiceabilityPanel() {
 
                     <div className="flex items-center justify-between text-[10px] text-slate-400">
                       <span>{c.notes}</span>
-                      {!c.is_contact && (
+                      <div className="flex items-center gap-1.5">
+                        {!c.is_contact && (
+                          <button
+                            onClick={() => handleShowClearanceIn3D(c)}
+                            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 text-[10px] font-medium transition-colors"
+                          >
+                            View in 3D
+                          </button>
+                        )}
                         <button
-                          onClick={() => handleShowClearanceIn3D(c)}
-                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 text-[10px] font-medium transition-colors"
+                          onClick={() => handleSectionThroughClearance(c)}
+                          className="flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-[10px] font-medium transition-colors"
+                          title="Cut an exact section plane through this clearance finding"
                         >
-                          View in 3D
+                          <Scissors className="w-2.5 h-2.5" />
+                          <span>Section</span>
                         </button>
-                      )}
+                      </div>
                     </div>
 
                     {c.directional_clearance_mm != null && (

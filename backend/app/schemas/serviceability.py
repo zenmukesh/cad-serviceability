@@ -230,3 +230,39 @@ class AssemblyServiceabilityReport(BaseModel):
 
     # Settings used
     settings: Dict[str, Any] = Field(default_factory=dict)
+
+
+# ─── Multi-Axis Sectioning Schemas (Phase D) ────────────────────────────────
+
+class SectionPlaneRequest(BaseModel):
+    point: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+    normal: List[float] = Field(default_factory=lambda: [0.0, 0.0, 1.0])
+    component_ids: Optional[List[int]] = None
+    measure_clearance_between: Optional[List[int]] = None
+
+
+class ComponentSectionOutline(BaseModel):
+    component_id: int
+    component_name: str
+    area_mm2: float
+    outlines: List[List[List[float]]] = Field(default_factory=list)
+
+
+class SectionClearanceResult(BaseModel):
+    component_a_id: int
+    component_b_id: int
+    component_a_name: str
+    component_b_name: str
+    clearance_mm: float
+    point_a: List[float]
+    point_b: List[float]
+
+
+class AssemblySectionResponse(BaseModel):
+    assembly_id: int
+    plane_point: List[float]
+    plane_normal: List[float]
+    total_cut_area_mm2: float
+    component_sections: List[ComponentSectionOutline] = Field(default_factory=list)
+    clearance: Optional[SectionClearanceResult] = None
+

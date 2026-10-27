@@ -5,6 +5,8 @@ import type {
   ClearanceMeasurement,
   ComponentObstructionReport,
   DisassemblyGraph,
+  AssemblySectionResponse,
+  SectionPlaneConfig,
 } from '../types/serviceability'
 
 export type RightPanelTab =
@@ -52,6 +54,13 @@ interface AssemblyStore {
   sectionPlaneAxis: 'off' | '+X' | '-X' | '+Y' | '-Y' | '+Z' | '-Z'
   sectionPlaneOffset: number // in mm
 
+  // ─── Phase D: Multi-Axis Sectioning (D1 - D3) ──────────────────────────────
+  sectionPlanes: SectionPlaneConfig[]
+  sectionCombinedMode: 'union' | 'intersection'
+  showSectionCaps: boolean
+  activeSectionResult: AssemblySectionResponse | null
+  isComputingSection: boolean
+
   // ─── Phase 6: 3D Visual Findings Highlighting ──────────────────────────────
   obstructingComponentIds: Set<number>
   activeClearanceLine: ClearanceLineVisual | null
@@ -82,6 +91,15 @@ interface AssemblyStore {
   setExplodeFactor: (f: number) => void
   setSectionPlaneAxis: (axis: 'off' | '+X' | '-X' | '+Y' | '-Y' | '+Z' | '-Z') => void
   setSectionPlaneOffset: (offset: number) => void
+
+  // Phase D Actions
+  setSectionPlane: (index: number, config: Partial<SectionPlaneConfig>) => void
+  setSectionCombinedMode: (mode: 'union' | 'intersection') => void
+  setShowSectionCaps: (show: boolean) => void
+  setActiveSectionResult: (res: AssemblySectionResponse | null) => void
+  setIsComputingSection: (v: boolean) => void
+  applySectionPreset: (preset: 'XY' | 'XZ' | 'YZ' | '45_XZ' | '45_YZ' | '45_XY' | 'compound_45' | 'removal_vector' | 'clear') => void
+  setSectionThroughFinding: (point: [number, number, number], normal: [number, number, number], label?: string) => void
 
   // 3D Visual Findings Actions
   setObstructingComponentIds: (ids: Set<number>) => void
@@ -114,6 +132,17 @@ export const useAssemblyStore = create<AssemblyStore>((set, get) => ({
   explodeFactor: 0.0,
   sectionPlaneAxis: 'off',
   sectionPlaneOffset: 0.0,
+
+  // ─── Phase D: Multi-Axis Sectioning (D1 - D3) ──────────────────────────────
+  sectionPlanes: [
+    { id: 1, enabled: false, point: [0, 0, 0], normal: [0, 0, 1], offset: 0, flipped: false, label: 'Plane 1 (Z)' },
+    { id: 2, enabled: false, point: [0, 0, 0], normal: [0, 1, 0], offset: 0, flipped: false, label: 'Plane 2 (Y)' },
+    { id: 3, enabled: false, point: [0, 0, 0], normal: [1, 0, 0], offset: 0, flipped: false, label: 'Plane 3 (X)' },
+  ],
+  sectionCombinedMode: 'union',
+  showSectionCaps: true,
+  activeSectionResult: null,
+  isComputingSection: false,
 
   // Visual Findings
   obstructingComponentIds: new Set<number>(),
@@ -162,6 +191,87 @@ export const useAssemblyStore = create<AssemblyStore>((set, get) => ({
   setExplodeFactor: (f) => set({ explodeFactor: Math.max(0, Math.min(1, f)) }),
   setSectionPlaneAxis: (axis) => set({ sectionPlaneAxis: axis }),
   setSectionPlaneOffset: (offset) => set({ sectionPlaneOffset: offset }),
+
+  // Phase D setters
+  setSectionPlane: (index, config) => {
+    const planes = [...get().sectionPlanes]
+    if (index >= 0 && index < planes.length) {
+      planes[index] = { ...planes[index], ...config }
+      set({ sectionPlanes: planes })
+    }
+  },
+  setSectionCombinedMode: (mode) => set({ sectionCombinedMode: mode }),
+  setShowSectionCaps: (show) => set({ showSectionCaps: show }),
+  setActiveSectionResult: (res) => set({ activeSectionResult: res }),
+  setIsComputingSection: (v) => set({ isComputingSection: v }),
+  applySectionPreset: (preset) => {
+    const planes = [...get().sectionPlanes]
+    if (preset === 'clear') {
+      planes.forEach((p) => (p.enabled = false))
+      set({ sectionPlanes: planes, activeSectionResult: null, sectionPlaneAxis: 'off' })
+      return
+    }
+
+    // Configure Plane 1 based on preset
+    planes[0].enabled = true
+    if (preset === 'XY') {
+      planes[0].normal = [0, 0, 1]
+      planes[0].offset = 0
+      planes[0].label = 'XY Preset (Z-Cut)'
+      set({ sectionPlaneAxis: '+Z', sectionPlaneOffset: 0 })
+    } else if (preset === 'XZ') {
+      planes[0].normal = [0, 1, 0]
+      planes[0].offset = 0
+      planes[0].label = 'XZ Preset (Y-Cut)'
+      set({ sectionPlaneAxis: '+Y', sectionPlaneOffset: 0 })
+    } else if (preset === 'YZ') {
+      planes[0].normal = [1, 0, 0]
+      planes[0].offset = 0
+      planes[0].label = 'YZ Preset (X-Cut)'
+      set({ sectionPlaneAxis: '+X', sectionPlaneOffset: 0 })
+    } else if (preset === '45_XZ') {
+      const inv = 1 / Math.sqrt(2)
+      planes[0].normal = [inv, 0, inv]
+      planes[0].offset = 0
+      planes[0].label = '45° XZ Oblique'
+    } else if (preset === '45_YZ') {
+      const inv = 1 / Math.sqrt(2)
+      planes[0].normal = [0, inv, inv]
+      planes[0].offset = 0
+      planes[0].label = '45° YZ Oblique'
+    } else if (preset === '45_XY') {
+      const inv = 1 / Math.sqrt(2)
+      planes[0].normal = [inv, inv, 0]
+      planes[0].offset = 0
+      planes[0].label = '45° XY Oblique'
+    } else if (preset === 'compound_45') {
+      const inv = 1 / Math.sqrt(3)
+      planes[0].normal = [inv, inv, inv]
+      planes[0].offset = 0
+      planes[0].label = 'Compound 45°/45° Oblique'
+    } else if (preset === 'removal_vector') {
+      const activeVec = get().activeAccessVector
+      if (activeVec) {
+        planes[0].normal = activeVec.dir
+        planes[0].point = activeVec.origin
+        planes[0].offset = 0
+        planes[0].label = `Removal Normal [${activeVec.dir.map((v: number) => v.toFixed(2)).join(', ')}]`
+      }
+    }
+    set({ sectionPlanes: planes })
+  },
+  setSectionThroughFinding: (point, normal, label) => {
+    const planes = [...get().sectionPlanes]
+    planes[0].enabled = true
+    planes[0].point = point
+    planes[0].normal = normal
+    planes[0].offset = 0
+    planes[0].label = label || 'Finding Section Plane'
+    set({
+      sectionPlanes: planes,
+      rightPanelTab: 'serviceability',
+    })
+  },
 
   // Visual findings setters
   setObstructingComponentIds: (ids) => set({ obstructingComponentIds: ids }),

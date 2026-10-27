@@ -5,6 +5,7 @@ import type {
   ClearanceMeasurement,
   ComponentObstructionReport,
   DisassemblyGraph,
+  AssemblySectionResponse,
 } from '../types/serviceability'
 
 const client = axios.create({
@@ -139,6 +140,22 @@ export async function getAllClearances(
 
 export async function getDependencyGraph(assemblyId: number): Promise<DisassemblyGraph> {
   const res = await client.get<DisassemblyGraph>(`/api/assemblies/${assemblyId}/dependency-graph`)
+  return res.data
+}
+
+export async function getAssemblySection(
+  assemblyId: number,
+  params: {
+    point: [number, number, number]
+    normal: [number, number, number]
+    component_ids?: number[]
+    measure_clearance_between?: [number, number]
+  }
+): Promise<AssemblySectionResponse> {
+  const res = await client.post<AssemblySectionResponse>(
+    `/api/assemblies/${assemblyId}/section`,
+    params
+  )
   return res.data
 }
 
