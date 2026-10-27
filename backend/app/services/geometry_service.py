@@ -35,6 +35,7 @@ from app.schemas.serviceability import (
     DirectionAttempt,
     ScoreDeduction,
     ComponentScore,
+    ToolApproachResult,
     AssemblyServiceabilityReport,
 )
 
@@ -49,6 +50,8 @@ from app.services.motion_planner import (
     check_screw_extraction_path,
     check_rotational_extraction_path,
     check_piecewise_linear_path,
+    check_fastener_tool_approach,
+    compute_directional_clearance,
 )
 
 logger = logging.getLogger(__name__)
@@ -519,6 +522,17 @@ def analyze_clearances(
             severity = "PASS"
             notes = f"Clearance adequate: {dist_mm:.2f} mm"
 
+        # Separation direction vector from p1 to p2 (C2)
+        sep_v = (p2.x - p1.x, p2.y - p1.y, p2.z - p1.z)
+        if dist_mm > 1e-4:
+            rem_vec = normalize_vector(sep_v)
+            rem_name = vector_to_cardinal_label(rem_vec)
+            dir_clr = round(dist_mm, 3)
+        else:
+            rem_vec = (0.0, 0.0, 1.0)
+            rem_name = "+Z"
+            dir_clr = 0.0
+
         results.append(
             ClearanceMeasurement(
                 target_component_id=c1.id,
@@ -528,6 +542,9 @@ def analyze_clearances(
                 neighbor_component_name=c2.display_name,
                 neighbor_cad_id=c2.cad_entity_id,
                 distance_mm=round(dist_mm, 3),
+                directional_clearance_mm=dir_clr,
+                removal_direction_vector=rem_vec,
+                removal_direction_name=rem_name,
                 point_on_target=p1,
                 point_on_neighbor=p2,
                 is_contact=is_contact,
@@ -866,6 +883,28 @@ def analyze_component_obstructions(
             "margin": round(float(m), 3),
         })
 
+    # Geometry-derived candidate directions (C1)
+    cand_dirs = extract_geometry_candidate_directions(target_shape)
+    feasible_candidates: List[DirectionAccessResult] = [d for d in direction_results if d.is_clear]
+    for c_vec in cand_dirs[:6]:
+        lbl = vector_to_cardinal_label(c_vec)
+        if not any(d.direction_name == lbl for d in direction_results):
+            obs_pairs = [(oc, shapes[oc.cad_entity_id]) for oc in other_components if oc.cad_entity_id in shapes]
+            is_c, act_t, blk_names, _ = check_arbitrary_extraction_path(
+                target_comp, target_shape, c_vec, obs_pairs, leaf_components
+            )
+            if is_c:
+                feasible_candidates.append(
+                    DirectionAccessResult(
+                        direction_name=lbl,
+                        direction_vector=c_vec,
+                        is_clear=True,
+                        free_travel_mm=round(act_t, 2),
+                        blockage_ratio=0.0,
+                        obstructing_components=[],
+                    )
+                )
+
     return ComponentObstructionReport(
         target_component_id=target_comp.id,
         target_component_name=target_comp.display_name,
@@ -878,6 +917,7 @@ def analyze_component_obstructions(
         freedom_cone_extreme_rays=extreme_rays,
         freedom_sphere_samples=freedom_samples,
         directions=direction_results,
+        feasible_candidate_directions=feasible_candidates,
         confidence="exact_brep",
         limitations=(
             "Evaluated along 6 cardinal directions and continuous polyhedral freedom cone using "
@@ -1122,11 +1162,12 @@ def check_entity_extraction_path(
                 continue
             o_bb = {"xmin": oc.bb_xmin, "xmax": oc.bb_xmax, "ymin": oc.bb_ymin, "ymax": oc.bb_ymax, "zmin": oc.bb_zmin, "zmax": oc.bb_zmax}
 
-            cache_key = (mc.cad_entity_id, dir_name, oc.cad_entity_id)
+            assy_id = getattr(mc, 'assembly_id', 0)
+            cache_key = (assy_id, mc.cad_entity_id, dir_name, oc.cad_entity_id)
             if cache_key in _PAIRWISE_SWEPT_COLLISION_CACHE:
                 hit, clash_d = _PAIRWISE_SWEPT_COLLISION_CACHE[cache_key]
             else:
-                pair_ov_key = (min(mc.cad_entity_id, oc.cad_entity_id), max(mc.cad_entity_id, oc.cad_entity_id))
+                pair_ov_key = (assy_id, min(mc.cad_entity_id, oc.cad_entity_id), max(mc.cad_entity_id, oc.cad_entity_id))
                 if pair_ov_key in _PAIRWISE_INITIAL_OVERLAP_CACHE:
                     init_overlap = _PAIRWISE_INITIAL_OVERLAP_CACHE[pair_ov_key]
                 else:
@@ -1686,6 +1727,7 @@ def build_disassembly_graph(
 
     if optimal_raw_seq and len(optimal_raw_seq) == len(entities):
         # 100% verified complete sequence found!
+        budget_exhausted = False
         sequence_status = "physically_verified"
         is_physically_verified = True
         validation_notes.append(
@@ -2520,6 +2562,35 @@ def compute_serviceability_scoring(
     if dep_graph.estimated_fastener_count > 4:
         general_recs.append("Standardize fastener drive types and lengths to minimize tooling changes during servicing.")
 
+    # Fastener Tool Approach Envelopes (C3)
+    tool_approaches: List[ToolApproachResult] = []
+    shapes = get_assembly_shapes(assembly_id, db)
+    for comp in leaf_components:
+        if is_fastener(comp.display_name):
+            f_shape = shapes.get(comp.cad_entity_id)
+            if f_shape:
+                other_shapes = [
+                    (oc, shapes[oc.cad_entity_id])
+                    for oc in leaf_components
+                    if oc.id != comp.id and oc.cad_entity_id in shapes and not are_sibling_fastener_solids(comp, oc)
+                ]
+                res = check_fastener_tool_approach(comp, f_shape, other_shapes)
+                tool_approaches.append(
+                    ToolApproachResult(
+                        component_id=comp.id,
+                        component_name=comp.display_name,
+                        cad_entity_id=comp.cad_entity_id,
+                        tool_axis_vector=res["tool_axis"],
+                        tool_length_mm=65.0,
+                        tool_radius_mm=8.0,
+                        tilt_cone_half_angle_deg=15.0,
+                        is_tool_access_free=res["is_free"],
+                        usable_tilt_angle_deg=res["usable_tilt_angle_deg"],
+                        blocking_components=res["blocking_components"],
+                        details=res["details"],
+                    )
+                )
+
     return AssemblyServiceabilityReport(
         assembly_id=assembly.id,
         filename=assembly.filename,
@@ -2529,6 +2600,7 @@ def compute_serviceability_scoring(
         critical_issues_count=crit_count,
         warnings_count=warn_count,
         component_scores=component_scores,
+        tool_approaches=tool_approaches,
         critical_safety_findings=critical_safety_findings,
         general_recommendations=general_recs,
         settings={

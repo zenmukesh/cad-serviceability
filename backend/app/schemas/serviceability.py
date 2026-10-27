@@ -30,6 +30,11 @@ class ClearanceMeasurement(BaseModel):
     point_on_target: Point3D
     point_on_neighbor: Point3D
 
+    # C2: Directional clearance along best removal direction in addition to minimum distance
+    directional_clearance_mm: Optional[float] = None
+    removal_direction_vector: Optional[Tuple[float, float, float]] = None
+    removal_direction_name: Optional[str] = None
+
     is_contact: bool = False
     is_pass: bool = True
     threshold_mm: float = 3.0
@@ -79,6 +84,7 @@ class ComponentObstructionReport(BaseModel):
     freedom_sphere_samples: List[Dict[str, Any]] = Field(default_factory=list)
 
     directions: List[DirectionAccessResult] = Field(default_factory=list)
+    feasible_candidate_directions: List[DirectionAccessResult] = Field(default_factory=list)
     confidence: str = "exact_brep"
     limitations: str = "Evaluated along 6 cardinal directions using OpenCASCADE analytical B-Rep curve-face intersector."
 
@@ -190,6 +196,23 @@ class ComponentScore(BaseModel):
     safety_warnings: List[str] = Field(default_factory=list)
 
 
+# ─── Tool Approach Schemas ───────────────────────────────────────────────────
+
+class ToolApproachResult(BaseModel):
+    """Tool approach envelope assessment along fastener axis with tilt cone."""
+    component_id: int
+    component_name: str
+    cad_entity_id: str
+    tool_axis_vector: Tuple[float, float, float]
+    tool_length_mm: float = 65.0
+    tool_radius_mm: float = 8.0
+    tilt_cone_half_angle_deg: float = 15.0
+    is_tool_access_free: bool = True
+    usable_tilt_angle_deg: float = 0.0
+    blocking_components: List[str] = Field(default_factory=list)
+    details: str = ""
+
+
 class AssemblyServiceabilityReport(BaseModel):
     assembly_id: int
     filename: str
@@ -201,6 +224,7 @@ class AssemblyServiceabilityReport(BaseModel):
     warnings_count: int
 
     component_scores: List[ComponentScore] = Field(default_factory=list)
+    tool_approaches: List[ToolApproachResult] = Field(default_factory=list)
     critical_safety_findings: List[str] = Field(default_factory=list)
     general_recommendations: List[str] = Field(default_factory=list)
 

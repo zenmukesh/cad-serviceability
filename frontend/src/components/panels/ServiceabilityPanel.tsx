@@ -408,17 +408,130 @@ export default function ServiceabilityPanel() {
             {selectedComp ? (
               selectedObstructionReport ? (
                 <>
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
-                    <div className="flex items-center justify-between mb-2">
+                  {/* Phase C Continuous Extraction Vector & Freedom Cone */}
+                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        Candidate Access Paths
+                        Arbitrary Direction Engine
                       </span>
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-700/50">
                         Best: {selectedObstructionReport.best_direction || 'None'}
                       </span>
                     </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="bg-slate-900/60 p-2 rounded border border-slate-800">
+                        <div className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">
+                          Optimal Vector
+                        </div>
+                        <div className="font-mono font-bold text-cyan-300">
+                          {selectedObstructionReport.best_direction_vector
+                            ? `[${selectedObstructionReport.best_direction_vector.map((v) => v.toFixed(2)).join(', ')}]`
+                            : 'None'}
+                        </div>
+                      </div>
+                      <div className="bg-slate-900/60 p-2 rounded border border-slate-800">
+                        <div className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">
+                          Freedom Cone θ
+                        </div>
+                        <div className="font-mono font-bold text-emerald-400">
+                          {selectedObstructionReport.freedom_cone_half_angle_deg != null
+                            ? `±${selectedObstructionReport.freedom_cone_half_angle_deg.toFixed(1)}°`
+                            : '0.0°'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between items-center text-[11px] text-slate-400 pt-1 border-t border-slate-800/80">
+                      <span>Max Free Travel:</span>
+                      <span className="font-mono font-semibold text-white">
+                        {selectedObstructionReport.max_free_travel_mm.toFixed(1)} mm
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Fastener Tool Approach Card (if applicable) */}
+                  {(() => {
+                    const toolApp = serviceabilityReport?.tool_approaches?.find(
+                      (ta) => ta.component_id === selectedComponentId
+                    )
+                    if (!toolApp) return null
+                    return (
+                      <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Fastener Tool Approach
+                          </span>
+                          <span
+                            className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
+                              toolApp.is_tool_access_free
+                                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600/40'
+                                : 'bg-red-950/80 text-red-300 border-red-600/40'
+                            }`}
+                          >
+                            {toolApp.is_tool_access_free ? 'Tool Access Free' : 'Tool Path Obstructed'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">{toolApp.details}</p>
+                        <div className="grid grid-cols-2 gap-2 text-[11px]">
+                          <div className="bg-slate-900/60 p-1.5 rounded border border-slate-800">
+                            <span className="text-[9px] uppercase text-slate-500 block">Envelope</span>
+                            <span className="font-mono text-slate-300">
+                              R={toolApp.tool_radius_mm}mm, L={toolApp.tool_length_mm}mm
+                            </span>
+                          </div>
+                          <div className="bg-slate-900/60 p-1.5 rounded border border-slate-800">
+                            <span className="text-[9px] uppercase text-slate-500 block">Usable Tilt</span>
+                            <span className="font-mono text-cyan-300">
+                              {toolApp.usable_tilt_angle_deg.toFixed(1)}° / {toolApp.tilt_cone_half_angle_deg.toFixed(1)}°
+                            </span>
+                          </div>
+                        </div>
+                        {toolApp.blocking_components.length > 0 && (
+                          <div className="text-[10px] text-red-300 bg-red-950/40 p-1.5 rounded border border-red-900/50">
+                            Blocked by: {toolApp.blocking_components.join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
+
+                  {/* Feasible Candidate Directions (if any beyond cardinal) */}
+                  {selectedObstructionReport.feasible_candidate_directions &&
+                    selectedObstructionReport.feasible_candidate_directions.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                          Feasible Arbitrary Motions ({selectedObstructionReport.feasible_candidate_directions.length})
+                        </div>
+                        <div className="space-y-1">
+                          {selectedObstructionReport.feasible_candidate_directions.map((fc, i) => (
+                            <div
+                              key={i}
+                              className="p-2 rounded bg-emerald-950/20 border border-emerald-500/30 flex items-center justify-between text-xs"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-emerald-300 font-bold">{fc.direction_name}</span>
+                                <span className="font-mono text-[10px] text-slate-400">
+                                  [{fc.direction_vector.map((v) => v.toFixed(2)).join(', ')}]
+                                </span>
+                              </div>
+                              <span className="font-mono text-emerald-400 text-[11px]">
+                                {fc.free_travel_mm.toFixed(1)} mm
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Cardinal Axes (Derived View)
+                      </span>
+                    </div>
                     <p className="text-[11px] text-slate-400">
-                      Evaluated along 6 cardinal directions using OpenCASCADE analytical B-Rep curve-face intersection.
+                      Evaluated along the 6 principal axes derived from the arbitrary swept collision engine.
                     </p>
                   </div>
 
@@ -593,6 +706,13 @@ export default function ServiceabilityPanel() {
                         </button>
                       )}
                     </div>
+
+                    {c.directional_clearance_mm != null && (
+                      <div className="flex items-center justify-between text-[10px] bg-slate-900/60 px-1.5 py-0.5 rounded border border-slate-800/80">
+                        <span className="text-slate-400">Swept Clearance ({c.removal_direction_name || 'vector'}):</span>
+                        <span className="font-mono text-cyan-300 font-semibold">{c.directional_clearance_mm.toFixed(2)} mm</span>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -751,6 +871,11 @@ export default function ServiceabilityPanel() {
                           </div>
 
                           <div className="flex items-center gap-1.5">
+                            {step.motion_type && (
+                              <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 font-semibold border border-cyan-800/40 uppercase">
+                                {step.motion_type}
+                              </span>
+                            )}
                             {step.removal_direction && (
                               <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-blue-300 font-bold border border-slate-700">
                                 {step.removal_direction}

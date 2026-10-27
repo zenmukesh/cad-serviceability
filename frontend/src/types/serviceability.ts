@@ -19,6 +19,9 @@ export interface ClearanceMeasurement {
   neighbor_cad_id: string
 
   distance_mm: number
+  directional_clearance_mm?: number
+  removal_direction_vector?: [number, number, number]
+  removal_direction_name?: string
   point_on_target: Point3D
   point_on_neighbor: Point3D
 
@@ -60,7 +63,11 @@ export interface ComponentObstructionReport {
   best_direction_vector?: [number, number, number]
   max_free_travel_mm: number
   all_directions_blocked: boolean
+  freedom_cone_half_angle_deg?: number
+  freedom_cone_extreme_rays?: [number, number, number][]
+  freedom_sphere_samples?: { vector: [number, number, number]; is_free: boolean; margin: number }[]
   directions: DirectionAccessResult[]
+  feasible_candidate_directions?: DirectionAccessResult[]
   confidence: string
   limitations: string
 }
@@ -97,6 +104,13 @@ export interface DisassemblyStep {
   cad_entity_id: string
   action: string
   removal_direction?: string
+  direction_vector?: [number, number, number]
+  motion_type?: 'straight' | 'screw' | 'rotation' | 'piecewise_linear'
+  freedom_cone_half_angle_deg?: number
+  rotation_axis?: [number, number, number]
+  rotation_center?: [number, number, number]
+  rotation_angle_deg?: number
+  path_segments?: any[]
   prerequisites: string[]
   notes: string
   member_component_ids?: number[]
@@ -157,6 +171,20 @@ export interface ComponentScore {
   safety_warnings: string[]
 }
 
+export interface ToolApproachResult {
+  component_id: number
+  component_name: string
+  cad_entity_id: string
+  tool_axis_vector: [number, number, number]
+  tool_length_mm: number
+  tool_radius_mm: number
+  tilt_cone_half_angle_deg: number
+  is_tool_access_free: boolean
+  usable_tilt_angle_deg: number
+  blocking_components: string[]
+  details: string
+}
+
 export interface AssemblyServiceabilityReport {
   assembly_id: number
   filename: string
@@ -168,6 +196,7 @@ export interface AssemblyServiceabilityReport {
   warnings_count: number
 
   component_scores: ComponentScore[]
+  tool_approaches?: ToolApproachResult[]
   critical_safety_findings: string[]
   general_recommendations: string[]
   settings: Record<string, any>

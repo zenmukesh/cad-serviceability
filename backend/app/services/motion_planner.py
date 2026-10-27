@@ -22,10 +22,10 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_SOLID
 from OCP.BRepAdaptor import BRepAdaptor_Surface, BRepAdaptor_Curve
 from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_Plane, GeomAbs_Line
-from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol, BRepPrimAPI_MakeBox
+from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol, BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
-from OCP.gp import gp_Vec, gp_Dir, gp_Pnt, gp_Ax1, gp_Trsf
+from OCP.gp import gp_Vec, gp_Dir, gp_Pnt, gp_Ax1, gp_Ax2, gp_Trsf
 
 logger = logging.getLogger(__name__)
 
@@ -626,3 +626,214 @@ def check_piecewise_linear_path(
         return (False, effective_travel1, actual_travel2, blockers2)
 
     return (True, effective_travel1, actual_travel2, [])
+
+
+# ─── 4. Tool Approach & Directional Clearance (Phase C) ───────────────────────
+
+def compute_directional_clearance(
+    target_comp: Any,
+    target_shape: cq.Shape,
+    direction_vec: Tuple[float, float, float],
+    obstacles: List[Tuple[Any, cq.Shape]],
+    all_bbs: List[Any],
+) -> float:
+    """
+    Compute directional clearance along an arbitrary direction vector (C2).
+    Returns the free travel distance (mm) before the target shape collides with any obstacle.
+    """
+    u = normalize_vector(direction_vec)
+    _, actual_travel, _, _ = check_arbitrary_extraction_path(
+        target_comp, target_shape, u, obstacles, all_bbs
+    )
+    return round(float(actual_travel), 2)
+
+
+def check_fastener_tool_approach(
+    fastener_comp: Any,
+    fastener_shape: cq.Shape,
+    obstacles: List[Tuple[Any, cq.Shape]],
+    tool_length_mm: float = 65.0,
+    tool_radius_mm: float = 8.0,
+    max_tilt_angle_deg: float = 15.0,
+    fastener_axis: Optional[Tuple[float, float, float]] = None,
+) -> Dict[str, Any]:
+    """
+    Check tool approach envelope along fastener axis with configurable tilt cone (C3).
+    A tool envelope (cylinder with radius and length) along the fastener axis is tested
+    for intersection with other components.
+    Output:
+      - is_free: bool
+      - blocking_components: List[str]
+      - usable_tilt_angle_deg: float
+      - tool_axis: Tuple[float, float, float]
+      - details: str
+    """
+    # 1. Identify primary fastener axis
+    if fastener_axis is not None:
+        primary_axis = normalize_vector(fastener_axis)
+        signs_to_test = [1.0]
+    else:
+        exp_f = TopExp_Explorer(fastener_shape.wrapped, TopAbs_FACE)
+        cyl_axes: List[Tuple[float, float, float]] = []
+        while exp_f.More():
+            face = TopoDS.Face_s(exp_f.Current())
+            surf = BRepAdaptor_Surface(face)
+            if surf.GetType() == GeomAbs_Cylinder:
+                ax = surf.Cylinder().Axis()
+                d = (ax.Direction().X(), ax.Direction().Y(), ax.Direction().Z())
+                cyl_axes.append(normalize_vector(d))
+            exp_f.Next()
+
+        if cyl_axes:
+            primary_axis = cyl_axes[0]
+        else:
+            # Fallback to dominant bbox axis
+            dx = getattr(fastener_comp, 'bb_xmax', 0.0) - getattr(fastener_comp, 'bb_xmin', 0.0)
+            dy = getattr(fastener_comp, 'bb_ymax', 0.0) - getattr(fastener_comp, 'bb_ymin', 0.0)
+            dz = getattr(fastener_comp, 'bb_zmax', 0.0) - getattr(fastener_comp, 'bb_zmin', 0.0)
+            if dz >= dx and dz >= dy:
+                primary_axis = (0.0, 0.0, 1.0)
+            elif dx >= dy:
+                primary_axis = (1.0, 0.0, 0.0)
+            else:
+                primary_axis = (0.0, 1.0, 0.0)
+        signs_to_test = [1.0, -1.0]
+
+    # 2. Determine head center and outward direction
+    # Centroid of fastener bounding box
+    cx = (getattr(fastener_comp, 'bb_xmin', 0.0) + getattr(fastener_comp, 'bb_xmax', 0.0)) / 2.0
+    cy = (getattr(fastener_comp, 'bb_ymin', 0.0) + getattr(fastener_comp, 'bb_ymax', 0.0)) / 2.0
+    cz = (getattr(fastener_comp, 'bb_zmin', 0.0) + getattr(fastener_comp, 'bb_zmax', 0.0)) / 2.0
+
+    # Obstacle centroid for determining outward orientation away from assembly core
+    if obstacles:
+        obs_cx = sum((getattr(oc, 'bb_xmin', 0.0) + getattr(oc, 'bb_xmax', 0.0)) / 2.0 for oc, _ in obstacles) / len(obstacles)
+        obs_cy = sum((getattr(oc, 'bb_ymin', 0.0) + getattr(oc, 'bb_ymax', 0.0)) / 2.0 for oc, _ in obstacles) / len(obstacles)
+        obs_cz = sum((getattr(oc, 'bb_zmin', 0.0) + getattr(oc, 'bb_zmax', 0.0)) / 2.0 for oc, _ in obstacles) / len(obstacles)
+    else:
+        obs_cx, obs_cy, obs_cz = cx, cy, cz
+
+    from OCP.GProp import GProp_GProps
+    from OCP.BRepGProp import BRepGProp
+
+    best_outward_axis = primary_axis
+    best_score = -float("inf")
+    best_head_pt = (cx, cy, cz)
+
+    for sign in signs_to_test:
+        test_dir = (primary_axis[0] * sign, primary_axis[1] * sign, primary_axis[2] * sign)
+        # Head point is at extreme boundary along test_dir
+        proj_max = max(
+            test_dir[0] * x + test_dir[1] * y + test_dir[2] * z
+            for x in [getattr(fastener_comp, 'bb_xmin', 0.0), getattr(fastener_comp, 'bb_xmax', 0.0)]
+            for y in [getattr(fastener_comp, 'bb_ymin', 0.0), getattr(fastener_comp, 'bb_ymax', 0.0)]
+            for z in [getattr(fastener_comp, 'bb_zmin', 0.0), getattr(fastener_comp, 'bb_zmax', 0.0)]
+        )
+        head_pt = (cx + test_dir[0] * (proj_max - (test_dir[0]*cx + test_dir[1]*cy + test_dir[2]*cz)),
+                   cy + test_dir[1] * (proj_max - (test_dir[0]*cx + test_dir[1]*cy + test_dir[2]*cz)),
+                   cz + test_dir[2] * (proj_max - (test_dir[0]*cx + test_dir[1]*cy + test_dir[2]*cz)))
+
+        # Build test tool cylinder
+        ax2 = gp_Ax2(gp_Pnt(head_pt[0], head_pt[1], head_pt[2]), gp_Dir(test_dir[0], test_dir[1], test_dir[2]))
+        tool_cyl = BRepPrimAPI_MakeCylinder(ax2, tool_radius_mm, tool_length_mm).Shape()
+
+        clash_vol = 0.0
+        for obs_comp, obs_shape in obstacles:
+            try:
+                c = BRepAlgoAPI_Common(tool_cyl, obs_shape.wrapped)
+                c.Build()
+                if c.IsDone():
+                    props = GProp_GProps()
+                    BRepGProp.VolumeProperties_s(c.Shape(), props)
+                    clash_vol += props.Mass()
+            except Exception:
+                pass
+
+        # Score balances minimal clash volume and pointing outward away from assembly mass
+        outward_dir_proj = test_dir[0] * (cx - obs_cx) + test_dir[1] * (cy - obs_cy) + test_dir[2] * (cz - obs_cz)
+        score = -clash_vol + 0.01 * outward_dir_proj
+
+        if score > best_score:
+            best_score = score
+            best_outward_axis = test_dir
+            best_head_pt = head_pt
+
+    # 3. Check axial tool approach along best_outward_axis
+    outward_u = normalize_vector(best_outward_axis)
+    ax2 = gp_Ax2(gp_Pnt(best_head_pt[0], best_head_pt[1], best_head_pt[2]), gp_Dir(outward_u[0], outward_u[1], outward_u[2]))
+    tool_cyl = BRepPrimAPI_MakeCylinder(ax2, tool_radius_mm, tool_length_mm).Shape()
+
+    blockers: List[str] = []
+    for obs_comp, obs_shape in obstacles:
+        try:
+            c = BRepAlgoAPI_Common(tool_cyl, obs_shape.wrapped)
+            c.Build()
+            if c.IsDone():
+                props = GProp_GProps()
+                BRepGProp.VolumeProperties_s(c.Shape(), props)
+                if props.Mass() > 0.05:
+                    name = getattr(obs_comp, 'display_name', getattr(obs_comp, 'name', 'Obstacle'))
+                    if name not in blockers:
+                        blockers.append(name)
+        except Exception:
+            pass
+
+    is_free = len(blockers) == 0
+
+    # 4. Usable tilt angle verification
+    usable_tilt = 0.0
+    if is_free:
+        usable_tilt = max_tilt_angle_deg
+        # Test tilt angles: 5, 10, 15 deg
+        perp = (0.0, -outward_u[2], outward_u[1]) if abs(outward_u[0]) < 0.8 else (-outward_u[1], outward_u[0], 0.0)
+        perp = normalize_vector(perp)
+        perp2 = (
+            outward_u[1]*perp[2] - outward_u[2]*perp[1],
+            outward_u[2]*perp[0] - outward_u[0]*perp[2],
+            outward_u[0]*perp[1] - outward_u[1]*perp[0]
+        )
+        for tilt_deg in [5.0, 10.0, max_tilt_angle_deg]:
+            rad = math.radians(tilt_deg)
+            # Sample 4 orthogonal tilt directions
+            has_blocked_tilt = False
+            for ang_step in range(4):
+                ang = ang_step * math.pi / 2.0
+                tilt_dir = (
+                    outward_u[0]*math.cos(rad) + (perp[0]*math.cos(ang) + perp2[0]*math.sin(ang))*math.sin(rad),
+                    outward_u[1]*math.cos(rad) + (perp[1]*math.cos(ang) + perp2[1]*math.sin(ang))*math.sin(rad),
+                    outward_u[2]*math.cos(rad) + (perp[2]*math.cos(ang) + perp2[2]*math.sin(ang))*math.sin(rad),
+                )
+                tilt_u = normalize_vector(tilt_dir)
+                ax2_tilt = gp_Ax2(gp_Pnt(best_head_pt[0], best_head_pt[1], best_head_pt[2]), gp_Dir(tilt_u[0], tilt_u[1], tilt_u[2]))
+                tool_tilt = BRepPrimAPI_MakeCylinder(ax2_tilt, tool_radius_mm, tool_length_mm).Shape()
+                for obs_comp, obs_shape in obstacles:
+                    try:
+                        c = BRepAlgoAPI_Common(tool_tilt, obs_shape.wrapped)
+                        c.Build()
+                        if c.IsDone():
+                            props = GProp_GProps()
+                            BRepGProp.VolumeProperties_s(c.Shape(), props)
+                            if props.Mass() > 0.05:
+                                has_blocked_tilt = True
+                                break
+                    except Exception:
+                        pass
+                if has_blocked_tilt:
+                    break
+            if has_blocked_tilt:
+                usable_tilt = max(0.0, tilt_deg - 5.0)
+                break
+
+    details = (
+        f"Tool cylinder ({tool_radius_mm*2.0:.1f} mm dia x {tool_length_mm:.1f} mm length) "
+        f"along {vector_to_cardinal_label(outward_u)}: {'FREE' if is_free else f'BLOCKED by {blockers}'}. "
+        f"Usable tilt angle: {usable_tilt:.1f}°."
+    )
+
+    return {
+        "is_free": is_free,
+        "blocking_components": blockers,
+        "usable_tilt_angle_deg": round(usable_tilt, 1),
+        "tool_axis": outward_u,
+        "details": details,
+    }

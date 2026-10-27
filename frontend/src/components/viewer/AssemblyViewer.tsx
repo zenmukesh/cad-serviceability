@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { getComponentMesh } from '../../api/client'
 import { useAssemblyStore } from '../../store/assemblyStore'
 import type { MeshData, Component } from '../../types/assembly'
+import FreedomSphere from './FreedomSphere'
 
 // ─── Mesh cache ──────────────────────────────────────────────────────────────
 const meshCache = new Map<number, MeshData>()
@@ -222,11 +223,32 @@ function AccessVectorOverlay({
     [origin]
   )
 
+  const { nearestAxis, angleDeg } = useMemo(() => {
+    const cardinalVectors: [string, [number, number, number]][] = [
+      ['+X', [1, 0, 0]], ['-X', [-1, 0, 0]],
+      ['+Y', [0, 1, 0]], ['-Y', [0, -1, 0]],
+      ['+Z', [0, 0, 1]], ['-Z', [0, 0, -1]],
+    ]
+    let best = '+Z'
+    let maxDot = -1
+    for (const [name, cv] of cardinalVectors) {
+      const dot = arrowDir.x * cv[0] + arrowDir.y * cv[1] + arrowDir.z * cv[2]
+      if (dot > maxDot) {
+        maxDot = dot
+        best = name
+      }
+    }
+    const deg = Math.acos(Math.max(-1, Math.min(1, maxDot))) * (180 / Math.PI)
+    return { nearestAxis: best, angleDeg: deg }
+  }, [arrowDir])
+
   const tipPos: [number, number, number] = [
     origin[0] + arrowDir.x * (length + 5),
     origin[1] + arrowDir.y * (length + 5),
     origin[2] + arrowDir.z * (length + 5),
   ]
+
+  const displayLabel = `${label ? label + ' ' : ''}[${arrowDir.x.toFixed(2)}, ${arrowDir.y.toFixed(2)}, ${arrowDir.z.toFixed(2)}] (${angleDeg.toFixed(1)}° to ${nearestAxis})`
 
   return (
     <group>
@@ -235,8 +257,8 @@ function AccessVectorOverlay({
         ref={arrowRef}
       />
       <Html position={tipPos} center distanceFactor={140}>
-        <div className="bg-blue-950/90 text-blue-300 border border-blue-500/60 rounded px-2 py-0.5 text-[10px] font-mono font-semibold whitespace-nowrap shadow-lg pointer-events-none">
-          {label}
+        <div className="bg-blue-950/90 text-cyan-300 border border-cyan-500/60 rounded px-2 py-0.5 text-[10px] font-mono font-semibold whitespace-nowrap shadow-lg pointer-events-none">
+          {displayLabel}
         </div>
       </Html>
     </group>
@@ -284,6 +306,7 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
     obstructingComponentIds,
     activeClearanceLine,
     activeAccessVector,
+    dependencyGraph,
   } = store
 
   // Enable local clipping on WebGLRenderer
@@ -326,27 +349,52 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
     return center
   }, [components])
 
-  // Compute individual exploded view displacement vectors (Phase 1)
+  // Map components to their verified extraction direction vector (C5)
+  const stepDirections = useMemo(() => {
+    const map = new Map<number, [number, number, number]>()
+    if (dependencyGraph?.sequence) {
+      for (const s of dependencyGraph.sequence) {
+        if (s.direction_vector) {
+          map.set(s.component_id, s.direction_vector)
+          if (s.member_component_ids) {
+            for (const mid of s.member_component_ids) {
+              map.set(mid, s.direction_vector)
+            }
+          }
+        }
+      }
+    }
+    return map
+  }, [dependencyGraph])
+
+  // Compute individual exploded view displacement vectors along own best removal direction (C5)
   const displacements = useMemo(() => {
     const map = new Map<number, [number, number, number]>()
     if (explodeFactor <= 0) return map
 
-    const maxDisp = 110.0 * explodeFactor
+    const maxDisp = 120.0 * explodeFactor
     for (const c of components) {
       if (!c.is_leaf || !c.bounding_box) continue
-      const cx = (c.bounding_box.xmin + c.bounding_box.xmax) / 2
-      const cy = (c.bounding_box.ymin + c.bounding_box.ymax) / 2
-      const cz = (c.bounding_box.zmin + c.bounding_box.zmax) / 2
-      const dir = new THREE.Vector3(cx - assemblyCenter.x, cy - assemblyCenter.y, cz - assemblyCenter.z)
-      if (dir.lengthSq() < 1.0) {
-        dir.set(0, 0, 1)
+
+      const bestVec = stepDirections.get(c.id)
+      let dir: THREE.Vector3
+      if (bestVec) {
+        dir = new THREE.Vector3(bestVec[0], bestVec[1], bestVec[2]).normalize()
       } else {
-        dir.normalize()
+        const cx = (c.bounding_box.xmin + c.bounding_box.xmax) / 2
+        const cy = (c.bounding_box.ymin + c.bounding_box.ymax) / 2
+        const cz = (c.bounding_box.zmin + c.bounding_box.zmax) / 2
+        dir = new THREE.Vector3(cx - assemblyCenter.x, cy - assemblyCenter.y, cz - assemblyCenter.z)
+        if (dir.lengthSq() < 1.0) {
+          dir.set(0, 0, 1)
+        } else {
+          dir.normalize()
+        }
       }
       map.set(c.id, [dir.x * maxDisp, dir.y * maxDisp, dir.z * maxDisp])
     }
     return map
-  }, [components, assemblyCenter, explodeFactor])
+  }, [components, assemblyCenter, explodeFactor, stepDirections])
 
   // Construct section clipping plane (mapped from CAD Z-up to Three.js Y-up)
   const clippingPlane = useMemo(() => {
@@ -486,7 +534,7 @@ export function AssemblyViewerCanvas({
   return (
     <Canvas
       style={{ background: '#0a0f1d' }}
-      camera={{ position: [0, 80, 220], fov: 45, near: 0.1, far: 20000 }}
+      camera={{ position: [0, 80, 220], fov: 45, near: 0.1, far: 20000, up: [0, 0, 1] }}
       gl={{ antialias: true, localClippingEnabled: true }}
     >
       <Scene showGrid={showGrid} fitViewTrigger={fitViewTrigger} />
@@ -496,7 +544,8 @@ export function AssemblyViewerCanvas({
 }
 
 export default function AssemblyViewer({ showGrid, fitViewTrigger }: AssemblyViewerProps) {
-  const { components, isLoading } = useAssemblyStore()
+  const { components, isLoading, selectedObstructionReport, selectedComponentId } = useAssemblyStore()
+  const selectedComp = components.find((c) => c.id === selectedComponentId)
 
   return (
     <div className="relative w-full h-full">
@@ -514,6 +563,14 @@ export default function AssemblyViewer({ showGrid, fitViewTrigger }: AssemblyVie
         </div>
       )}
       <AssemblyViewerCanvas showGrid={showGrid} fitViewTrigger={fitViewTrigger} />
+
+      {/* Phase C Freedom Sphere Overlay for Selected Component */}
+      {selectedObstructionReport && (
+        <FreedomSphere
+          report={selectedObstructionReport}
+          componentName={selectedComp?.display_name}
+        />
+      )}
     </div>
   )
 }
