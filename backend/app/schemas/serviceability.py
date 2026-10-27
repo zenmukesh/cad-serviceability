@@ -74,6 +74,9 @@ class ComponentObstructionReport(BaseModel):
     best_direction_vector: Optional[Tuple[float, float, float]] = None
     max_free_travel_mm: float = 0.0
     all_directions_blocked: bool = False
+    freedom_cone_half_angle_deg: Optional[float] = None
+    freedom_cone_extreme_rays: List[Tuple[float, float, float]] = Field(default_factory=list)
+    freedom_sphere_samples: List[Dict[str, Any]] = Field(default_factory=list)
 
     directions: List[DirectionAccessResult] = Field(default_factory=list)
     confidence: str = "exact_brep"
@@ -100,7 +103,10 @@ class DependencyEdge(BaseModel):
 
 
 class DirectionAttempt(BaseModel):
-    direction: str  # "+X", "-X", "+Y", "-Y", "+Z", "-Z"
+    direction: str  # "+X", "-X", "+Y", "-Y", "+Z", "-Z", or vector string
+    direction_vector: Optional[Tuple[float, float, float]] = None
+    motion_type: str = "straight"  # "straight", "screw", "rotation", "piecewise_linear"
+    freedom_cone_half_angle_deg: Optional[float] = None
     is_clear: bool
     max_travel_mm: Optional[float] = None
     colliding_components: List[str] = Field(default_factory=list)
@@ -114,6 +120,13 @@ class DisassemblyStep(BaseModel):
     cad_entity_id: str
     action: str  # "remove_fastener", "remove_component", "open_cover"
     removal_direction: Optional[str] = None
+    direction_vector: Optional[Tuple[float, float, float]] = None
+    motion_type: str = "straight"  # "straight", "screw", "rotation", "piecewise_linear"
+    freedom_cone_half_angle_deg: Optional[float] = None
+    rotation_axis: Optional[Tuple[float, float, float]] = None
+    rotation_center: Optional[Tuple[float, float, float]] = None
+    rotation_angle_deg: Optional[float] = None
+    path_segments: List[Dict[str, Any]] = Field(default_factory=list)
     prerequisites: List[str] = Field(default_factory=list)  # Names of components that had to be removed before this step
     notes: str = ""
     member_component_ids: List[int] = Field(default_factory=list)

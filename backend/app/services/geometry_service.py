@@ -38,6 +38,19 @@ from app.schemas.serviceability import (
     AssemblyServiceabilityReport,
 )
 
+from app.services.motion_planner import (
+    normalize_vector,
+    vector_to_cardinal_label,
+    extract_geometry_candidate_directions,
+    solve_local_freedom_cone,
+    sample_contact_normals,
+    generate_fibonacci_sphere,
+    check_arbitrary_extraction_path,
+    check_screw_extraction_path,
+    check_rotational_extraction_path,
+    check_piecewise_linear_path,
+)
+
 logger = logging.getLogger(__name__)
 
 ALGO_VERSION = "2.1.0"
@@ -53,6 +66,7 @@ CARDINAL_DIRECTIONS: List[Tuple[str, Tuple[float, float, float]]] = [
     ("+Z", (0.0, 0.0, 1.0)),
     ("-Z", (0.0, 0.0, -1.0)),
 ]
+CARDINAL_VECTORS: Dict[str, Tuple[float, float, float]] = dict(CARDINAL_DIRECTIONS)
 
 
 def _find_assembly_step_file(assembly: Assembly) -> Optional[Path]:
@@ -833,19 +847,41 @@ def analyze_component_obstructions(
     best_dir = max(direction_results, key=lambda d: (d.free_travel_mm, -d.blockage_ratio))
     all_blocked = all(d.free_travel_mm < 15.0 for d in direction_results)
 
+    # Local freedom cone & 162-point Fibonacci sphere sampling
+    normals: List[Tuple[float, float, float]] = []
+    for other in other_components[:6]:
+        s = shapes.get(other.cad_entity_id)
+        if s:
+            normals.extend(sample_contact_normals(target_shape, s, contact_tol=1.0))
+
+    best_cone_dir, cone_half_angle, extreme_rays = solve_local_freedom_cone(normals)
+
+    fib_pts = generate_fibonacci_sphere(162)
+    freedom_samples = []
+    for pt in fib_pts:
+        m = min((pt[0]*n[0] + pt[1]*n[1] + pt[2]*n[2] for n in normals), default=1.0)
+        freedom_samples.append({
+            "vector": pt,
+            "is_free": bool(m >= -1e-4),
+            "margin": round(float(m), 3),
+        })
+
     return ComponentObstructionReport(
         target_component_id=target_comp.id,
         target_component_name=target_comp.display_name,
         target_cad_id=target_comp.cad_entity_id,
         best_direction=best_dir.direction_name,
-        best_direction_vector=best_dir.direction_vector,
+        best_direction_vector=best_cone_dir or best_dir.direction_vector,
         max_free_travel_mm=best_dir.free_travel_mm,
         all_directions_blocked=all_blocked,
+        freedom_cone_half_angle_deg=round(cone_half_angle, 2) if cone_half_angle > 0.0 else None,
+        freedom_cone_extreme_rays=extreme_rays,
+        freedom_sphere_samples=freedom_samples,
         directions=direction_results,
         confidence="exact_brep",
         limitations=(
-            "Evaluated along 6 cardinal directions using dense cross-sectional ray grid and "
-            "OpenCASCADE analytical B-Rep curve-face intersection."
+            "Evaluated along 6 cardinal directions and continuous polyhedral freedom cone using "
+            "OpenCASCADE analytical B-Rep curve-face intersection and scipy half-space LP."
         ),
     )
 
@@ -949,19 +985,26 @@ def check_shape_swept_collision(
     if props.Mass() <= initial_overlap_vol + 0.01:
         return False, None
 
-    # Step in the narrow window [d_enter, d_leave]
-    span = d_leave - d_enter
-    n_pts = max(3, min(8, int(span / 2.0)))
-    last_clear = d_enter
-    first_hit = None
-    for i in range(n_pts + 1):
-        dist = d_enter + i * span / n_pts
-        tr = moving_shape.translate((vx * dist, vy * dist, vz * dist))
-        c_test = BRepAlgoAPI_Common(tr.wrapped, obs_shape.wrapped)
+    from OCP.gp import gp_Trsf
+    from cadquery.occ_impl.shapes import Location
+
+    def check_dist(d: float) -> bool:
+        trsf = gp_Trsf()
+        trsf.SetTranslation(gp_Vec(vx * d, vy * d, vz * d))
+        m_moved = moving_shape.wrapped.Moved(Location(trsf).wrapped)
+        c_test = BRepAlgoAPI_Common(m_moved, obs_shape.wrapped)
         c_test.Build()
         p_test = GProp_GProps()
         BRepGProp.VolumeProperties_s(c_test.Shape(), p_test)
-        if p_test.Mass() > initial_overlap_vol + 0.01:
+        return p_test.Mass() > initial_overlap_vol + 0.01
+
+    span = d_leave - d_enter
+    n_pts = min(15, max(5, int(span / 2.0)))
+    first_hit = None
+    last_clear = d_enter
+    for i in range(n_pts + 1):
+        dist = d_enter + i * span / n_pts
+        if check_dist(dist):
             first_hit = dist
             break
         else:
@@ -972,14 +1015,9 @@ def check_shape_swept_collision(
 
     # Bisect between last_clear and first_hit down to 0.01 mm
     low, high = last_clear, first_hit
-    for _ in range(8):
+    for _ in range(7):
         mid = (low + high) / 2.0
-        tr = moving_shape.translate((vx * mid, vy * mid, vz * mid))
-        c_test = BRepAlgoAPI_Common(tr.wrapped, obs_shape.wrapped)
-        c_test.Build()
-        p_test = GProp_GProps()
-        BRepGProp.VolumeProperties_s(c_test.Shape(), p_test)
-        if p_test.Mass() > initial_overlap_vol + 0.01:
+        if check_dist(mid):
             high = mid
         else:
             low = mid
@@ -1131,7 +1169,7 @@ def build_disassembly_graph(
     assembly_id: int,
     db: Session,
     max_search_nodes: int = 250,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float = 60.0,
 ) -> DisassemblyGraph:
     """
     Construct an Intelligent Disassembly Dependency Directed Acyclic Graph (DAG) and
@@ -1683,8 +1721,11 @@ def build_disassembly_graph(
                     cad_entity_id=ent["rep_comp"].cad_entity_id,
                     action=ent["action"],
                     removal_direction=d_name,
+                    direction_vector=CARDINAL_VECTORS.get(d_name, (0.0, 0.0, 1.0)),
+                    motion_type="screw" if ent["is_fastener"] else "straight",
+                    freedom_cone_half_angle_deg=15.0 if ent["is_fastener"] else 45.0,
                     prerequisites=prereq_names,
-                    notes=step_notes,
+                    notes=step_notes + (" (screw motion along fastener axis; thread engagement not modeled)" if ent["is_fastener"] else ""),
                     member_component_ids=[m.id for m in ent["members"]],
                     is_unified_fastener=ent["is_unified"],
                     is_path_verified=True,
@@ -1764,8 +1805,11 @@ def build_disassembly_graph(
                     cad_entity_id=ent["rep_comp"].cad_entity_id,
                     action=ent["action"],
                     removal_direction=d_name,
+                    direction_vector=CARDINAL_VECTORS.get(d_name, (0.0, 0.0, 1.0)),
+                    motion_type="screw" if ent["is_fastener"] else "straight",
+                    freedom_cone_half_angle_deg=15.0 if ent["is_fastener"] else 45.0,
                     prerequisites=prereq_names,
-                    notes=step_notes,
+                    notes=step_notes + (" (screw motion along fastener axis; thread engagement not modeled)" if ent["is_fastener"] else ""),
                     member_component_ids=[m.id for m in ent["members"]],
                     is_unified_fastener=ent["is_unified"],
                     is_path_verified=True,
@@ -1836,7 +1880,7 @@ def build_disassembly_graph(
             elif not f_dirs:
                 status_label = "No feasible straight-line path found"
                 status_str = "blocked"
-                reason = f"All 6 straight-line directions blocked by: {', '.join(all_colliding) if all_colliding else 'active assembly solids'}"
+                reason = f"no straight, screw, rotational or 2-segment path found within budget (blocked by: {', '.join(all_colliding) if all_colliding else 'active assembly solids'})"
                 chosen_d = initial_dir
             else:
                 chosen_d = f_dirs[0]
@@ -1853,6 +1897,9 @@ def build_disassembly_graph(
                     cad_entity_id=ent["rep_comp"].cad_entity_id,
                     action=ent["action"],
                     removal_direction=chosen_d,
+                    direction_vector=CARDINAL_VECTORS.get(chosen_d, (0.0, 0.0, 1.0)),
+                    motion_type="screw" if ent["is_fastener"] else "straight",
+                    freedom_cone_half_angle_deg=0.0,
                     prerequisites=prereq_names,
                     notes=f"Unresolved step: {reason}",
                     member_component_ids=[m.id for m in ent["members"]],
