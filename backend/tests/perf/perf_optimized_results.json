@@ -1,0 +1,98 @@
+{
+  "gearbox": {
+    "fixture_name": "gearbox",
+    "leaf_components_count": 19,
+    "total_duration_seconds": 126.9385,
+    "stages": [
+      {
+        "stage": "1_shape_load",
+        "duration_seconds": 1.7301,
+        "brep_common_calls": 0,
+        "brep_extrema_calls": 0,
+        "ray_intersector_calls": 0
+      },
+      {
+        "stage": "2_clearances",
+        "duration_seconds": 26.2017,
+        "brep_common_calls": 19,
+        "brep_extrema_calls": 151,
+        "ray_intersector_calls": 0
+      },
+      {
+        "stage": "3_obstruction_analysis",
+        "duration_seconds": 21.2661,
+        "brep_common_calls": 0,
+        "brep_extrema_calls": 78,
+        "ray_intersector_calls": 15265
+      },
+      {
+        "stage": "4_disassembly_graph",
+        "duration_seconds": 70.0494,
+        "brep_common_calls": 310,
+        "brep_extrema_calls": 32,
+        "ray_intersector_calls": 3608
+      },
+      {
+        "stage": "5_serviceability_scoring",
+        "duration_seconds": 7.66,
+        "brep_common_calls": 188,
+        "brep_extrema_calls": 0,
+        "ray_intersector_calls": 0
+      }
+    ],
+    "total_occ_counters": {
+      "brep_common_calls": 517,
+      "brep_extrema_calls": 261,
+      "ray_intersector_calls": 18873
+    },
+    "overall_score": 87.3
+  },
+  "blind": {
+    "fixture_name": "blind",
+    "leaf_components_count": 16,
+    "total_duration_seconds": 96.3215,
+    "stages": [
+      {
+        "stage": "1_shape_load",
+        "duration_seconds": 1.0666,
+        "brep_common_calls": 0,
+        "brep_extrema_calls": 0,
+        "ray_intersector_calls": 0
+      },
+      {
+        "stage": "2_clearances",
+        "duration_seconds": 18.49,
+        "brep_common_calls": 12,
+        "brep_extrema_calls": 116,
+        "ray_intersector_calls": 0
+      },
+      {
+        "stage": "3_obstruction_analysis",
+        "duration_seconds": 13.0733,
+        "brep_common_calls": 0,
+        "brep_extrema_calls": 76,
+        "ray_intersector_calls": 9221
+      },
+      {
+        "stage": "4_disassembly_graph",
+        "duration_seconds": 61.0166,
+        "brep_common_calls": 693,
+        "brep_extrema_calls": 24,
+        "ray_intersector_calls": 1304
+      },
+      {
+        "stage": "5_serviceability_scoring",
+        "duration_seconds": 2.6723,
+        "brep_common_calls": 72,
+        "brep_extrema_calls": 0,
+        "ray_intersector_calls": 0
+      }
+    ],
+    "total_occ_counters": {
+      "brep_common_calls": 777,
+      "brep_extrema_calls": 216,
+      "ray_intersector_calls": 10525
+    },
+    "overall_score": 80.8
+  }
+}

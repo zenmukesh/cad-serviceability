@@ -733,12 +733,36 @@ def check_fastener_tool_approach(
                    cy + test_dir[1] * (proj_max - (test_dir[0]*cx + test_dir[1]*cy + test_dir[2]*cz)),
                    cz + test_dir[2] * (proj_max - (test_dir[0]*cx + test_dir[1]*cy + test_dir[2]*cz)))
 
-        # Build test tool cylinder
-        ax2 = gp_Ax2(gp_Pnt(head_pt[0], head_pt[1], head_pt[2]), gp_Dir(test_dir[0], test_dir[1], test_dir[2]))
-        tool_cyl = BRepPrimAPI_MakeCylinder(ax2, tool_radius_mm, tool_length_mm).Shape()
+        # Bounding box of test tool cylinder for spatial culling
+        p1 = (head_pt[0] + test_dir[0] * tool_length_mm,
+              head_pt[1] + test_dir[1] * tool_length_mm,
+              head_pt[2] + test_dir[2] * tool_length_mm)
+        cyl_xmin = min(head_pt[0], p1[0]) - tool_radius_mm
+        cyl_xmax = max(head_pt[0], p1[0]) + tool_radius_mm
+        cyl_ymin = min(head_pt[1], p1[1]) - tool_radius_mm
+        cyl_ymax = max(head_pt[1], p1[1]) + tool_radius_mm
+        cyl_zmin = min(head_pt[2], p1[2]) - tool_radius_mm
+        cyl_zmax = max(head_pt[2], p1[2]) + tool_radius_mm
 
         clash_vol = 0.0
+        tool_cyl = None
         for obs_comp, obs_shape in obstacles:
+            # Spatial AABB overlap filter
+            o_xmin = getattr(obs_comp, 'bb_xmin', -float('inf'))
+            o_xmax = getattr(obs_comp, 'bb_xmax', float('inf'))
+            o_ymin = getattr(obs_comp, 'bb_ymin', -float('inf'))
+            o_ymax = getattr(obs_comp, 'bb_ymax', float('inf'))
+            o_zmin = getattr(obs_comp, 'bb_zmin', -float('inf'))
+            o_zmax = getattr(obs_comp, 'bb_zmax', float('inf'))
+            if (cyl_xmax < o_xmin or cyl_xmin > o_xmax or
+                cyl_ymax < o_ymin or cyl_ymin > o_ymax or
+                cyl_zmax < o_zmin or cyl_zmin > o_zmax):
+                continue
+
+            if tool_cyl is None:
+                ax2 = gp_Ax2(gp_Pnt(head_pt[0], head_pt[1], head_pt[2]), gp_Dir(test_dir[0], test_dir[1], test_dir[2]))
+                tool_cyl = BRepPrimAPI_MakeCylinder(ax2, tool_radius_mm, tool_length_mm).Shape()
+
             try:
                 c = BRepAlgoAPI_Common(tool_cyl, obs_shape.wrapped)
                 c.Build()
@@ -760,11 +784,34 @@ def check_fastener_tool_approach(
 
     # 3. Check axial tool approach along best_outward_axis
     outward_u = normalize_vector(best_outward_axis)
-    ax2 = gp_Ax2(gp_Pnt(best_head_pt[0], best_head_pt[1], best_head_pt[2]), gp_Dir(outward_u[0], outward_u[1], outward_u[2]))
-    tool_cyl = BRepPrimAPI_MakeCylinder(ax2, tool_radius_mm, tool_length_mm).Shape()
+    p1 = (best_head_pt[0] + outward_u[0] * tool_length_mm,
+          best_head_pt[1] + outward_u[1] * tool_length_mm,
+          best_head_pt[2] + outward_u[2] * tool_length_mm)
+    cyl_xmin = min(best_head_pt[0], p1[0]) - tool_radius_mm
+    cyl_xmax = max(best_head_pt[0], p1[0]) + tool_radius_mm
+    cyl_ymin = min(best_head_pt[1], p1[1]) - tool_radius_mm
+    cyl_ymax = max(best_head_pt[1], p1[1]) + tool_radius_mm
+    cyl_zmin = min(best_head_pt[2], p1[2]) - tool_radius_mm
+    cyl_zmax = max(best_head_pt[2], p1[2]) + tool_radius_mm
 
+    tool_cyl = None
     blockers: List[str] = []
     for obs_comp, obs_shape in obstacles:
+        o_xmin = getattr(obs_comp, 'bb_xmin', -float('inf'))
+        o_xmax = getattr(obs_comp, 'bb_xmax', float('inf'))
+        o_ymin = getattr(obs_comp, 'bb_ymin', -float('inf'))
+        o_ymax = getattr(obs_comp, 'bb_ymax', float('inf'))
+        o_zmin = getattr(obs_comp, 'bb_zmin', -float('inf'))
+        o_zmax = getattr(obs_comp, 'bb_zmax', float('inf'))
+        if (cyl_xmax < o_xmin or cyl_xmin > o_xmax or
+            cyl_ymax < o_ymin or cyl_ymin > o_ymax or
+            cyl_zmax < o_zmin or cyl_zmin > o_zmax):
+            continue
+
+        if tool_cyl is None:
+            ax2 = gp_Ax2(gp_Pnt(best_head_pt[0], best_head_pt[1], best_head_pt[2]), gp_Dir(outward_u[0], outward_u[1], outward_u[2]))
+            tool_cyl = BRepPrimAPI_MakeCylinder(ax2, tool_radius_mm, tool_length_mm).Shape()
+
         try:
             c = BRepAlgoAPI_Common(tool_cyl, obs_shape.wrapped)
             c.Build()
@@ -804,9 +851,33 @@ def check_fastener_tool_approach(
                     outward_u[2]*math.cos(rad) + (perp[2]*math.cos(ang) + perp2[2]*math.sin(ang))*math.sin(rad),
                 )
                 tilt_u = normalize_vector(tilt_dir)
-                ax2_tilt = gp_Ax2(gp_Pnt(best_head_pt[0], best_head_pt[1], best_head_pt[2]), gp_Dir(tilt_u[0], tilt_u[1], tilt_u[2]))
-                tool_tilt = BRepPrimAPI_MakeCylinder(ax2_tilt, tool_radius_mm, tool_length_mm).Shape()
+                t_p1 = (best_head_pt[0] + tilt_u[0] * tool_length_mm,
+                        best_head_pt[1] + tilt_u[1] * tool_length_mm,
+                        best_head_pt[2] + tilt_u[2] * tool_length_mm)
+                t_xmin = min(best_head_pt[0], t_p1[0]) - tool_radius_mm
+                t_xmax = max(best_head_pt[0], t_p1[0]) + tool_radius_mm
+                t_ymin = min(best_head_pt[1], t_p1[1]) - tool_radius_mm
+                t_ymax = max(best_head_pt[1], t_p1[1]) + tool_radius_mm
+                t_zmin = min(best_head_pt[2], t_p1[2]) - tool_radius_mm
+                t_zmax = max(best_head_pt[2], t_p1[2]) + tool_radius_mm
+
+                tool_tilt = None
                 for obs_comp, obs_shape in obstacles:
+                    o_xmin = getattr(obs_comp, 'bb_xmin', -float('inf'))
+                    o_xmax = getattr(obs_comp, 'bb_xmax', float('inf'))
+                    o_ymin = getattr(obs_comp, 'bb_ymin', -float('inf'))
+                    o_ymax = getattr(obs_comp, 'bb_ymax', float('inf'))
+                    o_zmin = getattr(obs_comp, 'bb_zmin', -float('inf'))
+                    o_zmax = getattr(obs_comp, 'bb_zmax', float('inf'))
+                    if (t_xmax < o_xmin or t_xmin > o_xmax or
+                        t_ymax < o_ymin or t_ymin > o_ymax or
+                        t_zmax < o_zmin or t_zmin > o_zmax):
+                        continue
+
+                    if tool_tilt is None:
+                        ax2_tilt = gp_Ax2(gp_Pnt(best_head_pt[0], best_head_pt[1], best_head_pt[2]), gp_Dir(tilt_u[0], tilt_u[1], tilt_u[2]))
+                        tool_tilt = BRepPrimAPI_MakeCylinder(ax2_tilt, tool_radius_mm, tool_length_mm).Shape()
+
                     try:
                         c = BRepAlgoAPI_Common(tool_tilt, obs_shape.wrapped)
                         c.Build()

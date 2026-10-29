@@ -1033,6 +1033,17 @@ def check_shape_swept_collision(
     from cadquery.occ_impl.shapes import Location
 
     def check_dist(d: float) -> bool:
+        # Instant AABB non-overlap test before invoking OpenCASCADE
+        c_xmin = m_bb["xmin"] + vx * d
+        c_xmax = m_bb["xmax"] + vx * d
+        c_ymin = m_bb["ymin"] + vy * d
+        c_ymax = m_bb["ymax"] + vy * d
+        c_zmin = m_bb["zmin"] + vz * d
+        c_zmax = m_bb["zmax"] + vz * d
+        if (c_xmax < o_bb["xmin"] or c_xmin > o_bb["xmax"] or
+            c_ymax < o_bb["ymin"] or c_ymin > o_bb["ymax"] or
+            c_zmax < o_bb["zmin"] or c_zmin > o_bb["zmax"]):
+            return False
         trsf = gp_Trsf()
         trsf.SetTranslation(gp_Vec(vx * d, vy * d, vz * d))
         m_moved = moving_shape.wrapped.Moved(Location(trsf).wrapped)
