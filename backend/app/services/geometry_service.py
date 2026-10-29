@@ -1215,6 +1215,7 @@ def build_disassembly_graph(
     db: Session,
     max_search_nodes: int = 250,
     timeout_seconds: float = 60.0,
+    precomputed_obstructions: Optional[Dict[int, ComponentObstructionReport]] = None,
 ) -> DisassemblyGraph:
     """
     Construct an Intelligent Disassembly Dependency Directed Acyclic Graph (DAG) and
@@ -1273,7 +1274,10 @@ def build_disassembly_graph(
 
     for c in leaf_components:
         try:
-            report = analyze_component_obstructions(assembly_id, c.id, db)
+            if precomputed_obstructions is not None and c.id in precomputed_obstructions:
+                report = precomputed_obstructions[c.id]
+            else:
+                report = analyze_component_obstructions(assembly_id, c.id, db)
             best_dir_name = report.best_direction
             best_directions[c.id] = best_dir_name or "+Z"
 
@@ -1898,8 +1902,18 @@ def build_disassembly_graph(
             unsat_prereqs = [entities[pk]["name"] for pk in ent["prereq_entity_keys"] if pk in unresolved_keys]
 
             # If search budget is exhausted, do not run heavy 6-direction swept CAD booleans
-            if budget_exhausted or (time.time() - start_time) >= timeout_seconds:
+            if (time.time() - start_time) >= timeout_seconds:
                 chosen_d = initial_dir
+                for d_name, d_vec in CARDINAL_DIRECTIONS:
+                    dir_attempts.append(
+                        DirectionAttempt(
+                            direction=d_name,
+                            is_clear=False,
+                            max_travel_mm=0.0,
+                            colliding_components=[],
+                            notes="Search timeout reached before verification",
+                        )
+                    )
                 if unsat_prereqs:
                     status_label = "Unresolved dependency cycle" if has_static_cycle else "Prerequisite required"
                     status_str = "cyclic" if has_static_cycle else "blocked"
@@ -2234,6 +2248,9 @@ def compute_serviceability_scoring(
     db: Session,
     settings_dict: Optional[Dict[str, Any]] = None,
     min_clearance_threshold_mm: Optional[float] = None,
+    precomputed_graph: Optional[DisassemblyGraph] = None,
+    precomputed_clearances: Optional[List[ClearanceMeasurement]] = None,
+    precomputed_obstructions: Optional[Dict[int, ComponentObstructionReport]] = None,
 ) -> AssemblyServiceabilityReport:
     """
     Rigorously audited Explainable Serviceability Scoring Engine.
@@ -2269,7 +2286,8 @@ def compute_serviceability_scoring(
             critical_warnings=[],
         )
 
-    dep_graph = build_disassembly_graph(assembly_id, db)
+    # Reuse precomputed disassembly graph if available
+    dep_graph = precomputed_graph if precomputed_graph is not None else build_disassembly_graph(assembly_id, db)
     step_order = {}
     prereq_counts = {}
     for s in dep_graph.sequence:
@@ -2279,7 +2297,20 @@ def compute_serviceability_scoring(
             step_order[mid] = s.step_number
             prereq_counts[mid] = len(s.prerequisites)
 
-    all_clearances = analyze_clearances(assembly_id, db, min_threshold_mm=min_clearance_thresh)
+    # Reuse precomputed clearances if available
+    all_clearances = (
+        precomputed_clearances
+        if precomputed_clearances is not None
+        else analyze_clearances(assembly_id, db, min_threshold_mm=min_clearance_thresh)
+    )
+
+    # Index clearances by component ID for instant O(1) retrieval without re-running OpenCASCADE
+    clearances_by_comp: Dict[int, List[ClearanceMeasurement]] = {c.id: [] for c in leaf_components}
+    for c in all_clearances:
+        if c.target_component_id in clearances_by_comp:
+            clearances_by_comp[c.target_component_id].append(c)
+        if c.neighbor_component_id in clearances_by_comp and c.neighbor_component_id != c.target_component_id:
+            clearances_by_comp[c.neighbor_component_id].append(c)
 
     unique_interference_findings: List[str] = []
     seen_interference_pairs: Set[Tuple[int, int]] = set()
@@ -2334,7 +2365,10 @@ def compute_serviceability_scoring(
 
         # ── 1. Access & Obstruction ──
         try:
-            obs_report = analyze_component_obstructions(assembly_id, comp.id, db)
+            if precomputed_obstructions is not None and comp.id in precomputed_obstructions:
+                obs_report = precomputed_obstructions[comp.id]
+            else:
+                obs_report = analyze_component_obstructions(assembly_id, comp.id, db)
             best_dir = obs_report.best_direction
             all_blocked = obs_report.all_directions_blocked
 
@@ -2404,9 +2438,7 @@ def compute_serviceability_scoring(
 
         # ── 2. Clearance & Solid Interference ──
         try:
-            clearances = analyze_clearances(
-                assembly_id, db, target_component_id=comp.id, min_threshold_mm=min_clearance_thresh
-            )
+            clearances = clearances_by_comp.get(comp.id, [])
 
             # Check for confirmed volumetric solid collisions first
             interferences = [c for c in clearances if c.classification == "INTERFERENCE"]

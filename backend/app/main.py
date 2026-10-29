@@ -93,6 +93,13 @@ async def startup_event():
     # Log dependency versions for traceability
     versions = collect_versions()
     logger.info(f"Software versions: {versions}")
+    # Pre-warm analysis process pool
+    try:
+        from app.services.analysis_manager import get_process_pool
+        pool = get_process_pool()
+        pool.submit(abs, 1)
+    except Exception as e:
+        logger.warning(f"Could not pre-warm process pool: {e}")
 
 
 # ─── Health check ─────────────────────────────────────────────────────────────

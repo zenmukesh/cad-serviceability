@@ -11,8 +11,10 @@ def get_version(package: str) -> str:
         return "not-installed"
 
 
-def collect_versions() -> dict:
-    """Return a dict of key dependency versions."""
+_CACHED_VERSIONS = None
+
+
+def _collect_versions_impl() -> dict:
     packages = {
         "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "fastapi": get_version("fastapi"),
@@ -29,3 +31,11 @@ def collect_versions() -> dict:
     except ImportError:
         packages["cadquery"] = "not-installed"
     return packages
+
+
+def collect_versions() -> dict:
+    """Return a dict of key dependency versions (cached)."""
+    global _CACHED_VERSIONS
+    if _CACHED_VERSIONS is None:
+        _CACHED_VERSIONS = _collect_versions_impl()
+    return dict(_CACHED_VERSIONS)

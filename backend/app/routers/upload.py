@@ -22,7 +22,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.assembly import Assembly, Component
 from app.schemas.assembly import UploadResponse, ErrorResponse
 from app.services.cad_importer import import_step_file
@@ -41,12 +41,7 @@ def _process_step_async(assembly_id: int, file_path: Path, db_url: str):
     Run STEP import in a background thread (called by BackgroundTasks).
     Creates its own DB session because FastAPI's session is request-scoped.
     """
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
-
-    engine = create_engine(db_url, connect_args={"check_same_thread": False})
-    LocalSession = sessionmaker(bind=engine)
-    db = LocalSession()
+    db = SessionLocal()
 
     try:
         assembly: Assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()

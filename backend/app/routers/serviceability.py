@@ -32,6 +32,11 @@ from app.services.geometry_service import (
     build_disassembly_graph,
     compute_serviceability_scoring,
 )
+from app.services.analysis_manager import (
+    get_or_compute_analysis_bundle,
+    get_cached_bundle,
+    clear_analysis_cache,
+)
 from app.services.section_service import compute_assembly_section
 
 logger = logging.getLogger(__name__)
@@ -47,7 +52,7 @@ class AnalyzeRequest(BaseModel):
     response_model=AssemblyServiceabilityReport,
     summary="Run full serviceability analysis on an assembly",
 )
-def run_serviceability_analysis(
+async def run_serviceability_analysis(
     assembly_id: int,
     request: Optional[AnalyzeRequest] = None,
     db: Session = Depends(get_db),
@@ -56,13 +61,11 @@ def run_serviceability_analysis(
     if not assembly:
         raise HTTPException(status_code=404, detail=f"Assembly {assembly_id} not found")
 
-    settings_dict = {}
-    if request and request.min_clearance_mm is not None:
-        settings_dict["min_clearance_mm"] = request.min_clearance_mm
+    min_clearance = request.min_clearance_mm if (request and request.min_clearance_mm is not None) else 3.0
 
     try:
-        report = compute_serviceability_scoring(assembly_id, db, settings_dict)
-        return report
+        bundle = await get_or_compute_analysis_bundle(assembly_id, db, min_clearance)
+        return bundle.report
     except Exception as e:
         logger.exception(f"Error analyzing assembly {assembly_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
@@ -73,7 +76,7 @@ def run_serviceability_analysis(
     response_model=AssemblyServiceabilityReport,
     summary="Get serviceability report for an assembly",
 )
-def get_serviceability_report(
+async def get_serviceability_report(
     assembly_id: int,
     min_clearance_mm: float = Query(3.0, ge=0.1, le=100.0),
     db: Session = Depends(get_db),
@@ -83,7 +86,8 @@ def get_serviceability_report(
         raise HTTPException(status_code=404, detail=f"Assembly {assembly_id} not found")
 
     try:
-        return compute_serviceability_scoring(assembly_id, db, {"min_clearance_mm": min_clearance_mm})
+        bundle = await get_or_compute_analysis_bundle(assembly_id, db, min_clearance_mm)
+        return bundle.report
     except Exception as e:
         logger.exception(f"Error generating report for assembly {assembly_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate serviceability report: {str(e)}")
@@ -102,6 +106,12 @@ def get_component_obstructions(
     comp = db.query(Component).filter(Component.id == component_id, Component.assembly_id == assembly_id).first()
     if not comp:
         raise HTTPException(status_code=404, detail=f"Component {component_id} not found in assembly {assembly_id}")
+
+    assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()
+    if assembly:
+        cached = get_cached_bundle(assembly.sha256, 3.0)
+        if cached and component_id in cached.obstructions:
+            return cached.obstructions[component_id]
 
     try:
         return analyze_component_obstructions(assembly_id, component_id, db)
@@ -124,6 +134,15 @@ def get_component_clearances(
     comp = db.query(Component).filter(Component.id == component_id, Component.assembly_id == assembly_id).first()
     if not comp:
         raise HTTPException(status_code=404, detail=f"Component {component_id} not found in assembly {assembly_id}")
+
+    assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()
+    if assembly:
+        cached = get_cached_bundle(assembly.sha256, min_clearance_mm)
+        if cached:
+            return [
+                c for c in cached.clearances
+                if c.target_component_id == component_id or c.neighbor_component_id == component_id
+            ]
 
     try:
         return analyze_clearances(
@@ -148,6 +167,10 @@ def get_all_clearances(
     if not assembly:
         raise HTTPException(status_code=404, detail=f"Assembly {assembly_id} not found")
 
+    cached = get_cached_bundle(assembly.sha256, min_clearance_mm)
+    if cached:
+        return cached.clearances
+
     try:
         return analyze_clearances(assembly_id, db, min_threshold_mm=min_clearance_mm)
     except Exception as e:
@@ -168,11 +191,21 @@ def get_dependency_graph(
     if not assembly:
         raise HTTPException(status_code=404, detail=f"Assembly {assembly_id} not found")
 
+    cached = get_cached_bundle(assembly.sha256, 3.0)
+    if cached:
+        return cached.graph
+
     try:
         return build_disassembly_graph(assembly_id, db)
     except Exception as e:
         logger.exception(f"Error building dependency graph for assembly {assembly_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Dependency graph generation failed: {str(e)}")
+
+
+@router.post("/cache/clear", tags=["cache"], summary="Clear analysis cache")
+def clear_cache():
+    clear_analysis_cache()
+    return {"status": "ok", "message": "Analysis cache cleared"}
 
 
 @router.post(
