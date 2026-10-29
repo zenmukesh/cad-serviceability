@@ -1,0 +1,48 @@
+{
+  "fixture_name": "blind",
+  "filename": "blind_serviceability_test.step",
+  "leaf_components_count": 16,
+  "total_duration_seconds": 54.1395,
+  "stages": [
+    {
+      "stage": "1_shape_load",
+      "duration_seconds": 0.1347,
+      "brep_common_calls": 0,
+      "brep_extrema_calls": 0,
+      "ray_intersector_calls": 0
+    },
+    {
+      "stage": "2_clearances",
+      "duration_seconds": 3.4894,
+      "brep_common_calls": 12,
+      "brep_extrema_calls": 116,
+      "ray_intersector_calls": 0
+    },
+    {
+      "stage": "3_obstruction_analysis",
+      "duration_seconds": 2.1943,
+      "brep_common_calls": 0,
+      "brep_extrema_calls": 76,
+      "ray_intersector_calls": 9221
+    },
+    {
+      "stage": "4_disassembly_graph",
+      "duration_seconds": 30.1256,
+      "brep_common_calls": 1319,
+      "brep_extrema_calls": 100,
+      "ray_intersector_calls": 10525
+    },
+    {
+      "stage": "5_serviceability_scoring",
+      "duration_seconds": 15.53,
+      "brep_common_calls": 372,
+      "brep_extrema_calls": 524,
+      "ray_intersector_calls": 19746
+    }
+  ],
+  "total_occ_counters": {
+    "brep_common_calls": 1703,
+    "brep_extrema_calls": 816,
+    "ray_intersector_calls": 39492
+  }
+}

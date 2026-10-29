@@ -1,0 +1,48 @@
+{
+  "fixture_name": "gearbox",
+  "filename": "gearbox_assembly.step",
+  "leaf_components_count": 19,
+  "total_duration_seconds": 64.5685,
+  "stages": [
+    {
+      "stage": "1_shape_load",
+      "duration_seconds": 0.1961,
+      "brep_common_calls": 0,
+      "brep_extrema_calls": 0,
+      "ray_intersector_calls": 0
+    },
+    {
+      "stage": "2_clearances",
+      "duration_seconds": 1.999,
+      "brep_common_calls": 19,
+      "brep_extrema_calls": 151,
+      "ray_intersector_calls": 0
+    },
+    {
+      "stage": "3_obstruction_analysis",
+      "duration_seconds": 1.4389,
+      "brep_common_calls": 0,
+      "brep_extrema_calls": 78,
+      "ray_intersector_calls": 15265
+    },
+    {
+      "stage": "4_disassembly_graph",
+      "duration_seconds": 38.4537,
+      "brep_common_calls": 1532,
+      "brep_extrema_calls": 110,
+      "ray_intersector_calls": 18873
+    },
+    {
+      "stage": "5_serviceability_scoring",
+      "duration_seconds": 20.72,
+      "brep_common_calls": 2217,
+      "brep_extrema_calls": 641,
+      "ray_intersector_calls": 34138
+    }
+  ],
+  "total_occ_counters": {
+    "brep_common_calls": 3768,
+    "brep_extrema_calls": 980,
+    "ray_intersector_calls": 68276
+  }
+}

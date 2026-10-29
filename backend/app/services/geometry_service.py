@@ -1651,6 +1651,9 @@ def build_disassembly_graph(
 
         candidate_moves = []
         for ek in eligible_keys:
+            if (time.time() - search_start_time) >= timeout_seconds:
+                budget_exhausted = True
+                break
             ent = entities[ek]
             mems = ent["members"]
             e_obs = [c for c in active_obs if c not in mems]
@@ -1886,49 +1889,61 @@ def build_disassembly_graph(
             all_colliding: List[str] = []
             f_dirs: List[str] = []
             dir_attempts: List[DirectionAttempt] = []
-            for d_name, d_vec in CARDINAL_DIRECTIONS:
-                ok, max_trav, clashes, clash_d = check_entity_extraction_path(
-                    mems, d_name, d_vec, e_obs, shapes, assembly_bounds
-                )
-                dir_attempts.append(
-                    DirectionAttempt(
-                        direction=d_name,
-                        is_clear=ok,
-                        max_travel_mm=max_trav if ok else clash_d,
-                        colliding_components=clashes,
-                        notes="Clear path" if ok else f"Clash with {', '.join(clashes)}",
-                    )
-                )
-                if ok:
-                    f_dirs.append(d_name)
-                else:
-                    for c_name in clashes:
-                        if c_name not in all_colliding:
-                            all_colliding.append(c_name)
-
             initial_dir = best_directions.get(ent["rep_comp"].id, "+Z")
             unsat_prereqs = [entities[pk]["name"] for pk in ent["prereq_entity_keys"] if pk in unresolved_keys]
 
-            if unsat_prereqs:
-                if has_static_cycle:
-                    status_label = "Unresolved dependency cycle"
-                    status_str = "cyclic"
-                    reason = f"Unresolved cycle with: {', '.join(unsat_prereqs)}"
-                else:
-                    status_label = "Prerequisite required"
-                    status_str = "blocked"
+            # If search budget is exhausted, do not run heavy 6-direction swept CAD booleans
+            if budget_exhausted or (time.time() - start_time) >= timeout_seconds:
+                chosen_d = initial_dir
+                if unsat_prereqs:
+                    status_label = "Unresolved dependency cycle" if has_static_cycle else "Prerequisite required"
+                    status_str = "cyclic" if has_static_cycle else "blocked"
                     reason = f"Prerequisite(s) not yet removed: {', '.join(unsat_prereqs)}"
-                chosen_d = initial_dir
-            elif not f_dirs:
-                status_label = "No feasible straight-line path found"
-                status_str = "blocked"
-                reason = f"no straight, screw, rotational or 2-segment path found within budget (blocked by: {', '.join(all_colliding) if all_colliding else 'active assembly solids'})"
-                chosen_d = initial_dir
+                else:
+                    status_label = "Candidate — unverified (search budget limit)"
+                    status_str = "unverified"
+                    reason = "Disassembly search budget reached before path check"
             else:
-                chosen_d = f_dirs[0]
-                status_label = "Candidate — unverified"
-                status_str = "unverified"
-                reason = f"Feasible along {chosen_d} but constrained by removal order"
+                for d_name, d_vec in CARDINAL_DIRECTIONS:
+                    ok, max_trav, clashes, clash_d = check_entity_extraction_path(
+                        mems, d_name, d_vec, e_obs, shapes, assembly_bounds
+                    )
+                    dir_attempts.append(
+                        DirectionAttempt(
+                            direction=d_name,
+                            is_clear=ok,
+                            max_travel_mm=max_trav if ok else clash_d,
+                            colliding_components=clashes,
+                            notes="Clear path" if ok else f"Clash with {', '.join(clashes)}",
+                        )
+                    )
+                    if ok:
+                        f_dirs.append(d_name)
+                    else:
+                        for c_name in clashes:
+                            if c_name not in all_colliding:
+                                all_colliding.append(c_name)
+
+                if unsat_prereqs:
+                    if has_static_cycle:
+                        status_label = "Unresolved dependency cycle"
+                        status_str = "cyclic"
+                        reason = f"Unresolved cycle with: {', '.join(unsat_prereqs)}"
+                    else:
+                        status_label = "Prerequisite required"
+                        status_str = "blocked"
+                        reason = f"Prerequisite(s) not yet removed: {', '.join(unsat_prereqs)}"
+                    chosen_d = initial_dir
+                elif not f_dirs:
+                    status_label = "No feasible straight-line path found"
+                    status_str = "blocked"
+                    reason = f"no straight, screw, rotational or 2-segment path found within budget (blocked by: {', '.join(all_colliding) if all_colliding else 'active assembly solids'})"
+                    chosen_d = initial_dir
+                else:
+                    chosen_d = f_dirs[0]
+                    status_label = "Candidate — unverified"
+                    status_str = "unverified"
+                    reason = f"Feasible along {chosen_d} but constrained by removal order"
 
             unresolved_reasons[ent["name"]] = reason
             sequence.append(

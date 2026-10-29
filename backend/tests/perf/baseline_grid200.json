@@ -1,0 +1,48 @@
+{
+  "fixture_name": "grid200",
+  "filename": "grid_200_assembly.step",
+  "leaf_components_count": 200,
+  "total_duration_seconds": 3672.4991,
+  "stages": [
+    {
+      "stage": "1_shape_load",
+      "duration_seconds": 0.6471,
+      "brep_common_calls": 0,
+      "brep_extrema_calls": 0,
+      "ray_intersector_calls": 0
+    },
+    {
+      "stage": "2_clearances",
+      "duration_seconds": 73.8286,
+      "brep_common_calls": 279,
+      "brep_extrema_calls": 6027,
+      "ray_intersector_calls": 0
+    },
+    {
+      "stage": "3_obstruction_analysis",
+      "duration_seconds": 40.8587,
+      "brep_common_calls": 0,
+      "brep_extrema_calls": 1200,
+      "ray_intersector_calls": 370448
+    },
+    {
+      "stage": "4_disassembly_graph",
+      "duration_seconds": 128.2186,
+      "brep_common_calls": 3185,
+      "brep_extrema_calls": 1800,
+      "ray_intersector_calls": 532708
+    },
+    {
+      "stage": "5_serviceability_scoring",
+      "duration_seconds": 3423.6845,
+      "brep_common_calls": 63850,
+      "brep_extrema_calls": 21081,
+      "ray_intersector_calls": 903156
+    }
+  ],
+  "total_occ_counters": {
+    "brep_common_calls": 67314,
+    "brep_extrema_calls": 30108,
+    "ray_intersector_calls": 1806312
+  }
+}
