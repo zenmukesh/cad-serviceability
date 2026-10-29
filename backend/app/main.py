@@ -15,6 +15,9 @@ from app.config import settings
 from app.database import init_db
 from app.routers import upload, assembly, serviceability
 from app.utils.version_info import collect_versions
+from app.utils.perf_tracker import get_call_counts
+import time
+from datetime import datetime, timezone
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -45,6 +48,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ─── Timing & Performance Middleware ──────────────────────────────────────────
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    t0 = time.perf_counter()
+    start_counters = get_call_counts()
+    ts_iso = datetime.now(timezone.utc).isoformat()
+
+    response = await call_next(request)
+
+    duration = time.perf_counter() - t0
+    end_counters = get_call_counts()
+    delta_counters = {
+        k: end_counters[k] - start_counters.get(k, 0)
+        for k in end_counters
+        if end_counters[k] > start_counters.get(k, 0)
+    }
+
+    logger.info(
+        f"[REQUEST_TIMING] timestamp={ts_iso} method={request.method} "
+        f"endpoint={request.url.path} duration={duration:.4f}s "
+        f"analysis_runs={delta_counters} total_cumulative={end_counters}"
+    )
+    response.headers["X-Process-Time"] = f"{duration:.4f}s"
+    return response
+
 
 # ─── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(upload.router)

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.assembly import Assembly, Component
+from app.utils.perf_tracker import record_call
 from app.schemas.serviceability import (
     Point3D,
     ClearanceMeasurement,
@@ -94,6 +95,7 @@ def get_assembly_shapes(assembly_id: int, db: Session) -> Dict[str, Any]:
     Uses in-memory cache keyed by (assembly_id, sha256); loads from STEP on first request.
     Returns: Dict[cad_entity_id, cq.Shape]
     """
+    record_call("get_assembly_shapes")
     assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()
     if not assembly:
         raise ValueError(f"Assembly {assembly_id} not found in database")
@@ -404,6 +406,7 @@ def analyze_clearances(
       - Bearing-shaft running clearance (radial gap <= 1.5 mm on coaxial interface)
       - Actual clearance deficits violating engineering thresholds
     """
+    record_call("analyze_clearances")
     shapes = get_assembly_shapes(assembly_id, db)
     leaf_components = (
         db.query(Component)
@@ -573,6 +576,7 @@ def analyze_component_obstructions(
     Uses OpenCASCADE analytical B-Rep IntCurvesFace_ShapeIntersector to test a dense cross-sectional grid of rays.
     Excludes sibling parts of the same physical fastener.
     """
+    record_call("analyze_component_obstructions")
     from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
     from OCP.gp import gp_Lin, gp_Pnt, gp_Dir
 
@@ -1223,6 +1227,7 @@ def build_disassembly_graph(
     - Explainable Disassembly Effort cost ranking (operation type, reorientation, travel)
     - Honest reporting of constraint cycles, blocked components, and search budget limits
     """
+    record_call("build_disassembly_graph")
     import time
     start_time = time.time()
 
@@ -2237,6 +2242,7 @@ def compute_serviceability_scoring(
     Total = 0 to 100.
     All deductions include exact evidence, threshold, and classification.
     """
+    record_call("compute_serviceability_scoring")
     settings_dict = settings_dict or {}
     if min_clearance_threshold_mm is not None:
         min_clearance_thresh = float(min_clearance_threshold_mm)
