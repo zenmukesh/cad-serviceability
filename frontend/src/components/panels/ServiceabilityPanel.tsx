@@ -10,7 +10,9 @@ import {
   ChevronDown,
   ChevronRight,
   Scissors,
+  X,
 } from 'lucide-react'
+import { FreedomSphere, deriveCardinalLabel } from '../viewer/FreedomSphere'
 import { useAssemblyStore, RightPanelTab } from '../../store/assemblyStore'
 import {
   getServiceabilityReport,
@@ -51,6 +53,33 @@ export default function ServiceabilityPanel() {
   const [minClearanceMm, setMinClearanceMm] = useState(3.0)
   const [expandedStep, setExpandedStep] = useState<number | null>(null)
 
+  // Part 3: Removal Directions card state (persisted, default closed, Esc to close)
+  const REMOVAL_CARD_KEY = 'cad_removal_directions_open'
+  const [isRemovalCardOpen, setIsRemovalCardOpenState] = useState(() => {
+    try {
+      return localStorage.getItem(REMOVAL_CARD_KEY) === 'true'
+    } catch {
+      return false
+    }
+  })
+
+  const setIsRemovalCardOpen = (open: boolean) => {
+    setIsRemovalCardOpenState(open)
+    try {
+      localStorage.setItem(REMOVAL_CARD_KEY, String(open))
+    } catch {}
+  }
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isRemovalCardOpen) {
+        setIsRemovalCardOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleEsc)
+    return () => window.removeEventListener('keydown', handleEsc)
+  }, [isRemovalCardOpen])
+
   const selectedComp = components.find((c) => c.id === selectedComponentId)
 
   // Selected component's score in the report
@@ -87,11 +116,34 @@ export default function ServiceabilityPanel() {
     const fetchComponentDetails = async () => {
       try {
         const obs = await getComponentObstructions(currentAssembly.id, selectedComponentId)
+
+        // Part 3: Single source of truth for direction vector & cardinal label
+        let bestVec: [number, number, number] = [0, 0, 1]
+        if (obs.directions && obs.directions.length > 0) {
+          const match = obs.directions.find((d: any) => d.direction_name === obs.best_direction)
+          if (match) {
+            bestVec = match.direction_vector
+          } else {
+            const bestClear = obs.directions.find((d: any) => d.is_clear)
+            if (bestClear) {
+              bestVec = bestClear.direction_vector
+            } else if (obs.best_direction_vector) {
+              bestVec = obs.best_direction_vector
+            }
+          }
+        } else if (obs.best_direction_vector) {
+          bestVec = obs.best_direction_vector
+        }
+
+        const { axis: derivedAxis } = deriveCardinalLabel(bestVec)
+        obs.best_direction_vector = bestVec
+        obs.best_direction = derivedAxis
         setSelectedObstructionReport(obs)
 
         // Set access vector preview for best direction
-        if (obs.best_direction_vector && selectedComp?.bounding_box) {
-          const bb = selectedComp.bounding_box
+        const currentComp = useAssemblyStore.getState().components.find((c) => c.id === selectedComponentId)
+        if (currentComp?.bounding_box) {
+          const bb = currentComp.bounding_box
           const center: [number, number, number] = [
             (bb.xmin + bb.xmax) / 2,
             (bb.ymin + bb.ymax) / 2,
@@ -99,8 +151,8 @@ export default function ServiceabilityPanel() {
           ]
           setActiveAccessVector({
             origin: center,
-            dir: obs.best_direction_vector,
-            label: `Extraction: ${obs.best_direction}`,
+            dir: bestVec,
+            label: derivedAxis,
           })
         }
 
@@ -483,8 +535,60 @@ export default function ServiceabilityPanel() {
         {rightPanelTab === 'obstructions' && (
           <div className="space-y-3">
             {selectedComp ? (
-              selectedObstructionReport ? (
-                <>
+              <>
+                {/* Part 3: Removal Directions Collapsed Card (Inspector) */}
+                <div
+                  className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2"
+                  data-testid="removal-directions-card"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Compass className="w-4 h-4 text-cyan-400" />
+                      <span className="text-xs font-semibold uppercase tracking-wider text-slate-200">
+                        Removal directions
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setIsRemovalCardOpen(!isRemovalCardOpen)}
+                        data-testid="toggle-removal-card-btn"
+                        className="px-2.5 py-1 rounded text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700/60 transition-colors"
+                      >
+                        {isRemovalCardOpen ? 'Hide Sphere' : 'View Sphere'}
+                      </button>
+                      {isRemovalCardOpen && (
+                        <button
+                          onClick={() => setIsRemovalCardOpen(false)}
+                          data-testid="close-removal-card-btn"
+                          className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-colors"
+                          title="Close (Esc)"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Directions this part can move out of the assembly without hitting anything. Green = free, red = blocked.
+                  </p>
+
+                  {isRemovalCardOpen && (
+                    selectedObstructionReport ? (
+                      <FreedomSphere
+                        report={selectedObstructionReport}
+                        componentName={selectedComp.display_name}
+                        onClose={() => setIsRemovalCardOpen(false)}
+                      />
+                    ) : (
+                      <div data-testid="freedom-sphere-container" className="p-3 text-center text-xs text-slate-400">Loading removal directions…</div>
+                    )
+                  )}
+                </div>
+
+                {selectedObstructionReport ? (
+                  <>
+
                   {/* Phase C Continuous Extraction Vector & Freedom Cone */}
                   <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
                     <div className="flex items-center justify-between">
@@ -707,8 +811,9 @@ export default function ServiceabilityPanel() {
                 <div className="p-4 text-center text-slate-400 text-xs">
                   Loading obstruction analysis…
                 </div>
-              )
-            ) : (
+              )}
+            </>
+          ) : (
               <div className="p-6 text-center text-slate-500 text-xs border border-dashed border-slate-800 rounded-xl">
                 Select a component to inspect its multi-directional obstruction envelopes.
               </div>

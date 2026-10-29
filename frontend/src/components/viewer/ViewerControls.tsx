@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React from 'react'
 import {
   Maximize2,
   X,
@@ -13,8 +13,6 @@ import {
 } from 'lucide-react'
 import { useAssemblyStore } from '../../store/assemblyStore'
 
-import { MultiAxisSectionControls } from './MultiAxisSectionControls'
-
 interface ViewerControlsProps {
   onFitView: () => void
   onToggleGrid: () => void
@@ -28,13 +26,15 @@ interface ToolButtonProps {
   active?: boolean
   disabled?: boolean
   title?: string
+  testId?: string
 }
 
-function ToolButton({ icon, label, onClick, active, disabled, title }: ToolButtonProps) {
+function ToolButton({ icon, label, onClick, active, disabled, title, testId }: ToolButtonProps) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      data-testid={testId}
       title={title || label}
       className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors
         ${disabled ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-500' : ''}
@@ -65,16 +65,15 @@ export default function ViewerControls({ onFitView, onToggleGrid, showGrid }: Vi
     toggleTransparentComponent,
     explodeFactor,
     setExplodeFactor,
-    sectionPlaneAxis,
-    sectionPlanes,
+    isSectionMode,
+    sectionRefPlane,
+    setSectionPlaneFromSimple,
+    closeSectionMode,
     activeClearanceLine,
     activeAccessVector,
     obstructingComponentIds,
     clearVisualFindings,
   } = useAssemblyStore()
-
-  const [showSectionOptions, setShowSectionOptions] = useState(false)
-  const isSectionActive = sectionPlanes.some((p) => p.enabled) || sectionPlaneAxis !== 'off'
 
   const handleIsolate = () => {
     if (selectedComponentId != null) {
@@ -179,21 +178,21 @@ export default function ViewerControls({ onFitView, onToggleGrid, showGrid }: Vi
           disabled={selectedComponentId == null}
         />
 
-        {/* Section View / Clipping Plane */}
-        <div className="relative">
-          <ToolButton
-            icon={<Scissors className="w-3.5 h-3.5 text-cyan-400" />}
-            label={`Section${isSectionActive ? ' (Active)' : ''}`}
-            title="Multi-Axis Sectioning (D1-D4): Up to 3 arbitrary planes, presets, solid caps & BREP cut"
-            onClick={() => setShowSectionOptions((o) => !o)}
-            active={isSectionActive}
-          />
-
-          <MultiAxisSectionControls
-            isOpen={showSectionOptions}
-            onClose={() => setShowSectionOptions(false)}
-          />
-        </div>
+        {/* Part 2: Section View / Clipping Plane */}
+        <ToolButton
+          icon={<Scissors className="w-3.5 h-3.5 text-cyan-400" />}
+          label={`Section${isSectionMode ? ' (Active)' : ''}`}
+          testId="toolbar-section-btn"
+          title="Toggle engineering graphics sectioning bar"
+          onClick={() => {
+            if (isSectionMode) {
+              closeSectionMode()
+            } else {
+              setSectionPlaneFromSimple(sectionRefPlane || 'Top')
+            }
+          }}
+          active={isSectionMode}
+        />
 
         {/* Clear Visual Findings */}
         {hasVisualFindings && (

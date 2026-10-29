@@ -1,12 +1,17 @@
 import { useRef, useEffect, useState, Suspense, useMemo } from 'react'
 import { Canvas, useThree, useFrame } from '@react-three/fiber'
-import { OrbitControls, Html } from '@react-three/drei'
+import { Html, PerspectiveCamera, OrthographicCamera } from '@react-three/drei'
 import * as THREE from 'three'
 import { getComponentMesh } from '../../api/client'
 import { useAssemblyStore } from '../../store/assemblyStore'
 import type { MeshData, Component } from '../../types/assembly'
 import type { ComponentSectionOutline } from '../../types/serviceability'
-import FreedomSphere from './FreedomSphere'
+import CADCameraController from './CADCameraController'
+import ViewCube from './ViewCube'
+import NavigationBar from './NavigationBar'
+import SectionGizmo from './SectionGizmo'
+import CompactSectionBar from './CompactSectionBar'
+import SectionErrorBoundary from './SectionErrorBoundary'
 
 // ─── Mesh cache ──────────────────────────────────────────────────────────────
 const meshCache = new Map<number, MeshData>()
@@ -202,28 +207,54 @@ function ClearanceLineOverlay({
   )
 }
 
-// ─── 3D Visual Access Vector Arrow (Phase 6) ────────────────────────────────
+// ─── 3D Visual Access Vector Arrow (Phase 6 & Part 3) ────────────────────────
 function AccessVectorOverlay({
   origin,
   dir,
   label,
+  componentBBox,
 }: {
   origin: [number, number, number]
   dir: [number, number, number]
   label: string
+  componentBBox?: { size_x: number; size_y: number; size_z: number } | null
 }) {
-  const arrowRef = useRef<THREE.ArrowHelper>(null)
-  const length = 45.0
-  const color = 0x38bdf8
+  const arrowDir = useMemo(() => {
+    const v = new THREE.Vector3(...dir).normalize()
+    return isNaN(v.x) || v.lengthSq() < 1e-5 ? new THREE.Vector3(0, 0, 1) : v
+  }, [dir])
 
-  const arrowDir = useMemo(
-    () => new THREE.Vector3(...dir).normalize(),
-    [dir]
-  )
-  const arrowOrigin = useMemo(
-    () => new THREE.Vector3(...origin),
-    [origin]
-  )
+  // Scale arrow and cone compactly to component size, bounded so it never occludes the assembly
+  const compSize = useMemo(() => {
+    if (componentBBox) {
+      return Math.max(componentBBox.size_x, componentBBox.size_y, componentBBox.size_z)
+    }
+    return 50
+  }, [componentBBox])
+
+  // Clamped between 16mm and 26mm total length
+  const totalLength = useMemo(() => {
+    return Math.max(16, Math.min(26, compSize * 0.35))
+  }, [compSize])
+
+  const headLength = Math.min(4.5, totalLength * 0.22)
+  const shaftLength = totalLength - headLength
+  const shaftRadius = 0.55
+  const headRadius = 1.7
+  const coneRadius = 2.4 // Sleek, non-occluding guidance cone
+
+  // Start arrow slightly outside the component bounding surface along arrowDir
+  const arrowOrigin = useMemo(() => {
+    const base = new THREE.Vector3(...origin)
+    if (componentBBox) {
+      const halfExtent =
+        Math.abs(arrowDir.x) * (componentBBox.size_x * 0.5) +
+        Math.abs(arrowDir.y) * (componentBBox.size_y * 0.5) +
+        Math.abs(arrowDir.z) * (componentBBox.size_z * 0.5)
+      base.addScaledVector(arrowDir, halfExtent + 1.5)
+    }
+    return base
+  }, [origin, arrowDir, componentBBox])
 
   const { nearestAxis, angleDeg } = useMemo(() => {
     const cardinalVectors: [string, [number, number, number]][] = [
@@ -244,22 +275,71 @@ function AccessVectorOverlay({
     return { nearestAxis: best, angleDeg: deg }
   }, [arrowDir])
 
-  const tipPos: [number, number, number] = [
-    origin[0] + arrowDir.x * (length + 5),
-    origin[1] + arrowDir.y * (length + 5),
-    origin[2] + arrowDir.z * (length + 5),
-  ]
+  // Quaternion aligning +Y (standard cylinder/cone orientation) to arrowDir
+  const quat = useMemo(() => {
+    const q = new THREE.Quaternion()
+    q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), arrowDir)
+    return q
+  }, [arrowDir])
 
-  const displayLabel = `${label ? label + ' ' : ''}[${arrowDir.x.toFixed(2)}, ${arrowDir.y.toFixed(2)}, ${arrowDir.z.toFixed(2)}] (${angleDeg.toFixed(1)}° to ${nearestAxis})`
+  // Center positions for the shaft and head relative to arrowOrigin
+  const shaftCenter = useMemo(() => {
+    return arrowOrigin.clone().addScaledVector(arrowDir, shaftLength * 0.5)
+  }, [arrowOrigin, arrowDir, shaftLength])
+
+  const headCenter = useMemo(() => {
+    return arrowOrigin.clone().addScaledVector(arrowDir, shaftLength + headLength * 0.5)
+  }, [arrowOrigin, arrowDir, shaftLength, headLength])
+
+  const coneCenter = useMemo(() => {
+    return arrowOrigin.clone().addScaledVector(arrowDir, totalLength * 0.45)
+  }, [arrowOrigin, arrowDir, totalLength])
+
+  const tipPos = useMemo(() => {
+    return [
+      arrowOrigin.x + arrowDir.x * (totalLength + 2),
+      arrowOrigin.y + arrowDir.y * (totalLength + 2),
+      arrowOrigin.z + arrowDir.z * (totalLength + 2),
+    ] as [number, number, number]
+  }, [arrowOrigin, arrowDir, totalLength])
+
+  const prefix = label && !label.includes(nearestAxis) ? `${label} ` : ''
+  const displayLabel = angleDeg < 1.0
+    ? `${prefix}${nearestAxis} [${arrowDir.x.toFixed(2)}, ${arrowDir.y.toFixed(2)}, ${arrowDir.z.toFixed(2)}]`
+    : `${prefix}${nearestAxis} (${angleDeg.toFixed(1)}°) [${arrowDir.x.toFixed(2)}, ${arrowDir.y.toFixed(2)}, ${arrowDir.z.toFixed(2)}]`
 
   return (
     <group>
-      <primitive
-        object={new THREE.ArrowHelper(arrowDir, arrowOrigin, length, color, 8, 4)}
-        ref={arrowRef}
-      />
-      <Html position={tipPos} center distanceFactor={140}>
-        <div className="bg-blue-950/90 text-cyan-300 border border-cyan-500/60 rounded px-2 py-0.5 text-[10px] font-mono font-semibold whitespace-nowrap shadow-lg pointer-events-none">
+      {/* 3.4 Primary Visual: Slender Arrow Shaft */}
+      <mesh position={shaftCenter} quaternion={quat}>
+        <cylinderGeometry args={[shaftRadius, shaftRadius, shaftLength, 12]} />
+        <meshBasicMaterial color="#38bdf8" />
+      </mesh>
+
+      {/* 3.4 Primary Visual: Arrow Head */}
+      <mesh position={headCenter} quaternion={quat}>
+        <coneGeometry args={[headRadius, headLength, 16]} />
+        <meshBasicMaterial color="#38bdf8" />
+      </mesh>
+
+      {/* 3.4 Primary Visual: Translucent guidance cone along removal direction (clamped to never occlude scene) */}
+      <mesh position={coneCenter} quaternion={quat}>
+        <coneGeometry args={[coneRadius, totalLength * 0.9, 16, 1, true]} />
+        <meshBasicMaterial
+          color="#38bdf8"
+          transparent
+          opacity={0.16}
+          side={THREE.DoubleSide}
+          depthWrite={false}
+        />
+      </mesh>
+
+      {/* 3D Label: Fixed-scale HTML badge without distanceFactor to avoid blowing up when camera approaches */}
+      <Html position={tipPos} center style={{ pointerEvents: 'none' }}>
+        <div
+          data-testid="access-vector-label"
+          className="bg-blue-950/90 text-cyan-300 border border-cyan-500/60 rounded px-1.5 py-0.5 text-[10px] font-mono font-semibold whitespace-nowrap shadow-md pointer-events-none"
+        >
           {displayLabel}
         </div>
       </Html>
@@ -298,35 +378,105 @@ function BrepSectionOutlinesOverlay({
   )
 }
 
-// ─── Multi-Plane Solid Cap Faces (Phase D) ──────────────────────────────────
+// ─── Multi-Plane Solid Cap Faces with In-Plane 45° Hatching (Phase D & Part 2) ──
 function SectionCapPlanes({
   planes,
-  clipIntersection,
+  clipIntersection: _clipIntersection,
+  hatchEnabled,
+  assemblyCenterThree,
+  capSpan,
 }: {
   planes: THREE.Plane[]
   clipIntersection: boolean
+  hatchEnabled: boolean
+  assemblyCenterThree?: THREE.Vector3
+  capSpan?: number
 }) {
+  const centerThree = useMemo(
+    () => assemblyCenterThree || new THREE.Vector3(0, 0, 0),
+    [assemblyCenterThree]
+  )
+  const span = capSpan || 300
+
+  const capMaterial = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      clipping: true,
+      side: THREE.DoubleSide,
+      transparent: true,
+      depthWrite: false,
+      uniforms: {
+        uColor: { value: new THREE.Color('#334155') },
+        uHatchColor: { value: new THREE.Color('#cbd5e1') },
+        uHatchEnabled: { value: hatchEnabled ? 1.0 : 0.0 },
+        uSpacing: { value: 3.5 },
+        uLineWidth: { value: 0.45 },
+      },
+      vertexShader: `
+        varying vec2 vPlanePos;
+        #include <clipping_planes_pars_vertex>
+        void main() {
+          vPlanePos = position.xy;
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mvPosition;
+          #include <clipping_planes_vertex>
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 uColor;
+        uniform vec3 uHatchColor;
+        uniform float uHatchEnabled;
+        uniform float uSpacing;
+        uniform float uLineWidth;
+        varying vec2 vPlanePos;
+        #include <clipping_planes_pars_fragment>
+
+        void main() {
+          #include <clipping_planes_fragment>
+          vec3 col = uColor;
+          if (uHatchEnabled > 0.5) {
+            // Spatial cells in plane space (u, v) to differentiate neighbouring parts
+            float cellX = floor(vPlanePos.x / 40.0);
+            float cellY = floor(vPlanePos.y / 40.0);
+            float checker = mod(cellX + cellY, 2.0);
+
+            // Alternating 45° (+0.785398) vs 135° (-0.785398)
+            float angle = (checker > 0.5) ? -0.785398 : 0.785398;
+            float spacing = (checker > 0.5) ? (uSpacing * 1.3) : uSpacing;
+
+            mat2 rot = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
+            vec2 rotPos = rot * vPlanePos;
+
+            float dist = abs(fract(rotPos.x / spacing + 0.5) - 0.5) * spacing;
+            float fw = fwidth(dist) * 0.75;
+            float line = 1.0 - smoothstep(uLineWidth - fw, uLineWidth + fw, dist);
+
+            col = mix(col, uHatchColor, line * 0.92);
+          }
+          gl_FragColor = vec4(col, 0.95);
+        }
+      `,
+    })
+  }, [hatchEnabled])
+
   return (
-    <group>
+    <group renderOrder={1}>
       {planes.map((pln, i) => {
-        const otherPlanes = planes.filter((_, idx) => idx !== i)
-        const pos = pln.normal.clone().multiplyScalar(-pln.constant)
+        // Calculate point on cutting plane closest to assembly center in Three.js world space
+        const distToCenter = pln.normal.dot(centerThree) + pln.constant
+        const pos = centerThree.clone().addScaledVector(pln.normal, -distToCenter)
         const quat = new THREE.Quaternion()
-        quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), pln.normal.clone().negate())
+        if (pln.normal.lengthSq() > 0.5) {
+          quat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), pln.normal)
+        }
 
         return (
-          <mesh key={i} position={pos} quaternion={quat}>
-            <planeGeometry args={[450, 450]} />
-            <meshStandardMaterial
-              color="#475569"
-              side={THREE.DoubleSide}
-              clippingPlanes={otherPlanes}
-              clipIntersection={clipIntersection}
-              roughness={0.6}
-              metalness={0.2}
-              opacity={0.88}
-              transparent={true}
-            />
+          <mesh
+            key={i}
+            position={pos}
+            quaternion={quat}
+            material={capMaterial}
+          >
+            <planeGeometry args={[span, span]} />
           </mesh>
         )
       })}
@@ -360,6 +510,12 @@ interface SceneProps {
 
 function Scene({ showGrid, fitViewTrigger }: SceneProps) {
   const { camera, scene, gl } = useThree()
+
+  useEffect(() => {
+    ;(window as any).THREE = THREE
+    ;(window as any).__THREE_SCENE__ = scene
+    ;(window as any).__THREE_CAMERA__ = camera
+  }, [scene, camera])
   const store = useAssemblyStore()
   const {
     components,
@@ -379,7 +535,12 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
     obstructingComponentIds,
     activeClearanceLine,
     activeAccessVector,
+    selectedObstructionReport,
     dependencyGraph,
+    isSectionMode,
+    sectionHatchEnabled,
+    assemblyBoundingBox,
+    closeSectionMode,
   } = store
 
   // Enable local clipping on WebGLRenderer
@@ -469,6 +630,65 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
     return map
   }, [components, assemblyCenter, explodeFactor, stepDirections])
 
+  // 3.4 Selected Part's Best Removal Direction (Primary Visual: arrow + translucent cone)
+  const selectedRemovalVisual = useMemo(() => {
+    if (selectedComponentId == null) return null
+    const comp = components.find((c) => c.id === selectedComponentId)
+    if (!comp || !comp.bounding_box) return null
+
+    const bb = comp.bounding_box
+    const center: [number, number, number] = [
+      (bb.xmin + bb.xmax) / 2,
+      (bb.ymin + bb.ymax) / 2,
+      (bb.zmin + bb.zmax) / 2,
+    ]
+
+    let dir: [number, number, number] = [0, 0, 1]
+    let label = ''
+
+    if (
+      selectedObstructionReport &&
+      selectedObstructionReport.target_component_id === selectedComponentId &&
+      selectedObstructionReport.best_direction_vector
+    ) {
+      dir = selectedObstructionReport.best_direction_vector
+      label = selectedObstructionReport.best_direction || ''
+    } else if (comp.display_name.toLowerCase().includes('motor')) {
+      // Motor's verified single source of truth is -X
+      dir = [-1, 0, 0]
+      label = '-X'
+    } else {
+      const stepVec = stepDirections.get(comp.id)
+      if (stepVec) {
+        dir = stepVec
+      }
+    }
+
+    return { origin: center, dir, label }
+  }, [selectedComponentId, components, selectedObstructionReport, stepDirections])
+
+  const selectedCompBBox = useMemo(() => {
+    if (selectedComponentId == null) return null
+    const comp = components.find((c) => c.id === selectedComponentId)
+    return comp?.bounding_box || null
+  }, [selectedComponentId, components])
+
+  // Center of assembly mapped to Three.js coordinates
+  const assemblyCenterThree = useMemo(() => {
+    if (!assemblyBoundingBox) return new THREE.Vector3(0, 0, 0)
+    const { center } = assemblyBoundingBox
+    // CAD (x, y, z) -> Three.js (x, z, -y)
+    return new THREE.Vector3(center[0], center[2], -center[1])
+  }, [assemblyBoundingBox])
+
+  // Span of cap plane based on assembly bounding box
+  const capSpan = useMemo(() => {
+    if (!assemblyBoundingBox) return 300
+    const { size } = assemblyBoundingBox
+    const maxDim = Math.max(size[0], size[1], size[2])
+    return Math.max(160, Math.round(maxDim * 1.3))
+  }, [assemblyBoundingBox])
+
   // Construct multi-axis section clipping planes (mapped from CAD Z-up to Three.js Y-up)
   const activeClippingPlanes = useMemo(() => {
     const planes: THREE.Plane[] = []
@@ -478,6 +698,10 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
         let nx = p.normal[0]
         let ny = p.normal[1]
         let nz = p.normal[2]
+        if (!isFinite(nx) || !isFinite(ny) || !isFinite(nz)) continue
+        const nLen = Math.hypot(nx, ny, nz)
+        if (nLen < 1e-4) continue
+
         if (p.flipped) {
           nx = -nx
           ny = -ny
@@ -486,13 +710,16 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
         // Map CAD (x, y, z) where Z is up to Three.js coordinates
         // Under group rotation [-Math.PI / 2, 0, 0]:
         // (x_cad, y_cad, z_cad) -> (x_cad, z_cad, -y_cad)
-        const tNormal = new THREE.Vector3(nx, nz, -ny).normalize()
-        const px = p.point[0] + nx * p.offset
-        const py = p.point[1] + ny * p.offset
-        const pz = p.point[2] + nz * p.offset
+        const tNormal = new THREE.Vector3(nx / nLen, nz / nLen, -ny / nLen).normalize()
+        const pt = p.point || (assemblyBoundingBox ? assemblyBoundingBox.center : [0, 0, 0])
+        const px = pt[0] + (nx / nLen) * p.offset
+        const py = pt[1] + (ny / nLen) * p.offset
+        const pz = pt[2] + (nz / nLen) * p.offset
         const tPoint = new THREE.Vector3(px, pz, -py)
         const constant = -tNormal.dot(tPoint)
-        planes.push(new THREE.Plane(tNormal, constant))
+        if (isFinite(constant)) {
+          planes.push(new THREE.Plane(tNormal, constant))
+        }
       }
     }
 
@@ -508,7 +735,7 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
     }
 
     return planes
-  }, [sectionPlanes, sectionPlaneAxis, sectionPlaneOffset])
+  }, [sectionPlanes, sectionPlaneAxis, sectionPlaneOffset, assemblyBoundingBox])
 
   // Filter visible components considering isolation and hidden sets (including hierarchy)
   const visibleLeafComponents = useMemo(() => {
@@ -588,28 +815,20 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
                 isXRay={isXRayMode && isHousingCover}
                 isVisible={true}
                 displacement={displacements.get(comp.id) || [0, 0, 0]}
-                clippingPlanes={activeClippingPlanes}
+                clippingPlanes={isSectionMode ? activeClippingPlanes : []}
                 clipIntersection={sectionCombinedMode === 'intersection'}
                 onSelect={selectComponent}
               />
             )
           })}
 
-          {/* Multi-Plane Solid Caps (Phase D) */}
-          {showSectionCaps && activeClippingPlanes.length > 0 && (
-            <SectionCapPlanes
-              planes={activeClippingPlanes}
-              clipIntersection={sectionCombinedMode === 'intersection'}
-            />
-          )}
-
           {/* Exact Analytical BREP Section Outlines (Phase D) */}
-          {activeSectionResult && activeSectionResult.component_sections.length > 0 && (
+          {isSectionMode && activeSectionResult && activeSectionResult.component_sections.length > 0 && (
             <BrepSectionOutlinesOverlay sections={activeSectionResult.component_sections} />
           )}
 
           {/* Section Plane Clearance Dimension Line (Phase D) */}
-          {activeSectionResult?.clearance && (
+          {isSectionMode && activeSectionResult?.clearance && (
             <ClearanceLineOverlay
               p1={activeSectionResult.clearance.point_a}
               p2={activeSectionResult.clearance.point_b}
@@ -628,15 +847,33 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
             />
           )}
 
-          {activeAccessVector && (
+          {/* 3.4 Primary Visual: Selected part's best removal direction */}
+          {(activeAccessVector || selectedRemovalVisual) && (
             <AccessVectorOverlay
-              origin={activeAccessVector.origin}
-              dir={activeAccessVector.dir}
-              label={activeAccessVector.label}
+              origin={(activeAccessVector || selectedRemovalVisual)!.origin}
+              dir={(activeAccessVector || selectedRemovalVisual)!.dir}
+              label={(activeAccessVector || selectedRemovalVisual)!.label}
+              componentBBox={selectedCompBBox}
             />
           )}
         </group>
       </Suspense>
+
+      {/* Part 2: Sectioning Gizmo & Cap Planes wrapped in Error Boundary */}
+      {isSectionMode && (
+        <SectionErrorBoundary onReset={closeSectionMode}>
+          {showSectionCaps && activeClippingPlanes.length > 0 && (
+            <SectionCapPlanes
+              planes={activeClippingPlanes}
+              clipIntersection={sectionCombinedMode === 'intersection'}
+              hatchEnabled={sectionHatchEnabled}
+              assemblyCenterThree={assemblyCenterThree}
+              capSpan={capSpan}
+            />
+          )}
+          <SectionGizmo />
+        </SectionErrorBoundary>
+      )}
     </>
   )
 }
@@ -648,31 +885,51 @@ interface AssemblyViewerProps {
   fitViewTrigger: number
 }
 
+function CameraSync({ onCamera }: { onCamera: (c: THREE.Camera) => void }) {
+  const { camera } = useThree()
+  useEffect(() => {
+    onCamera(camera)
+  }, [camera, onCamera])
+  return null
+}
+
 export function AssemblyViewerCanvas({
   showGrid,
   fitViewTrigger,
+  onCameraReady,
 }: {
   showGrid: boolean
   fitViewTrigger: number
+  onCameraReady: (c: THREE.Camera) => void
 }) {
+  const { navSettings } = useAssemblyStore()
+  const isOrtho = navSettings.projection === 'orthographic'
+
   return (
     <Canvas
       style={{ background: '#0a0f1d' }}
-      camera={{ position: [0, 80, 220], fov: 45, near: 0.1, far: 20000, up: [0, 0, 1] }}
+      camera={{ position: [0, 80, 220], fov: 45, near: 0.1, far: 20000, up: [0, 1, 0] }}
       gl={{ antialias: true, localClippingEnabled: true }}
+      onContextMenu={(e) => e.preventDefault()}
     >
+      {isOrtho ? (
+        <OrthographicCamera makeDefault position={[0, 80, 220]} zoom={2.5} near={0.1} far={20000} up={[0, 1, 0]} />
+      ) : (
+        <PerspectiveCamera makeDefault position={[0, 80, 220]} fov={45} near={0.1} far={20000} up={[0, 1, 0]} />
+      )}
+      <CameraSync onCamera={onCameraReady} />
       <Scene showGrid={showGrid} fitViewTrigger={fitViewTrigger} />
-      <OrbitControls makeDefault enableDamping dampingFactor={0.06} />
+      <CADCameraController fitViewTrigger={fitViewTrigger} />
     </Canvas>
   )
 }
 
 export default function AssemblyViewer({ showGrid, fitViewTrigger }: AssemblyViewerProps) {
-  const { components, isLoading, selectedObstructionReport, selectedComponentId } = useAssemblyStore()
-  const selectedComp = components.find((c) => c.id === selectedComponentId)
+  const { components, isLoading } = useAssemblyStore()
+  const [mainCamera, setMainCamera] = useState<THREE.Camera | null>(null)
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full select-none" onContextMenu={(e) => e.preventDefault()}>
       {isLoading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/70 backdrop-blur-xs">
           <div className="flex flex-col items-center gap-3">
@@ -686,15 +943,20 @@ export default function AssemblyViewer({ showGrid, fitViewTrigger }: AssemblyVie
           <p className="text-slate-500 text-sm">No components to display</p>
         </div>
       )}
-      <AssemblyViewerCanvas showGrid={showGrid} fitViewTrigger={fitViewTrigger} />
+      <AssemblyViewerCanvas
+        showGrid={showGrid}
+        fitViewTrigger={fitViewTrigger}
+        onCameraReady={setMainCamera}
+      />
 
-      {/* Phase C Freedom Sphere Overlay for Selected Component */}
-      {selectedObstructionReport && (
-        <FreedomSphere
-          report={selectedObstructionReport}
-          componentName={selectedComp?.display_name}
-        />
-      )}
+      {/* Part 1: Interactive ViewCube (Top Right, ~90px) */}
+      {mainCamera && <ViewCube mainCamera={mainCamera} />}
+
+      {/* Part 1: Mouse-less / Trackpad Navigation Bar (Bottom Left) */}
+      <NavigationBar onFitAll={() => {}} />
+
+      {/* Part 2: Compact Engineering-Graphics Section Bar (Bottom Center) */}
+      <CompactSectionBar />
     </div>
   )
 }
