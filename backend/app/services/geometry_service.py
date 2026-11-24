@@ -78,10 +78,12 @@ def _find_assembly_step_file(assembly: Assembly) -> Optional[Path]:
     candidate_paths = [
         Path(settings.upload_dir) / f"{assembly.sha256}.step",
         Path(settings.upload_dir) / f"{assembly.sha256}.stp",
+        Path(settings.test_data_dir) / assembly.filename,
         Path("test_data") / assembly.filename,
         Path("backend/test_data") / assembly.filename,
-        Path("d:/projects/cad-serviceability/backend/test_data") / assembly.filename,
-        Path("d:/projects/cad-serviceability/uploads") / f"{assembly.sha256}.step",
+        Path("uploads") / f"{assembly.sha256}.step",
+        Path("../uploads") / f"{assembly.sha256}.step",
+        Path("../test_data") / assembly.filename,
     ]
     for p in candidate_paths:
         if p.exists() and p.is_file():

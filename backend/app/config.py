@@ -11,9 +11,10 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite:///./cad_serviceability.db"
 
-    # Upload limits
+    # Upload and test data paths
     max_upload_size_mb: int = 500
-    upload_dir: Path = Path("../uploads")
+    upload_dir: Path = Path("uploads")
+    test_data_dir: Path = Path("test_data")
 
     # Tessellation quality (smaller = finer mesh, slower)
     tessellation_linear_deflection: float = 0.5   # mm
