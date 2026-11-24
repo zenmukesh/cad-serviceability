@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 const EVIDENCE_DIR = path.resolve(__dirname);
-const BASE_URL = 'http://localhost:5173';
+const BASE_URL = 'http://127.0.0.1:5173';
 
 async function run() {
   console.log('=== STARTING DEMO SMOKE TEST ===');
@@ -72,7 +72,7 @@ async function run() {
 
   // 2. Clear cache first via backend API to measure cold performance accurately
   try {
-    const res = await page.request.post('http://localhost:8000/api/cache/clear');
+    const res = await page.request.post('http://127.0.0.1:8000/api/cache/clear');
     console.log('Cache cleared via API:', res.status());
   } catch (e) {
     console.warn('Could not clear cache:', e.message);

@@ -1,8 +1,8 @@
 {
-  "test_timestamp": "2026-11-24T13:32:05.408Z",
+  "test_timestamp": "2026-11-24T17:21:46.690Z",
   "overall_score": "90.5",
-  "cold_analysis_duration_ms": 149,
-  "warm_analysis_duration_ms": 89,
+  "cold_analysis_duration_ms": 146,
+  "warm_analysis_duration_ms": 83,
   "cold_api_calls_count": 21,
   "warm_api_calls_count": 2,
   "is_freedom_sphere_open_by_default": false,
@@ -15,123 +15,9 @@
     "nonBgPixels": 562944,
     "nonBgRatio": 1
   },
-  "failed_requests": [
-    {
-      "url": "http://localhost:5173/api/geometry/1613",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1614",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1615",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1616",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1618",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1619",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1621",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1622",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1613",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1614",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1616",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1615",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1618",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1619",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1621",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    },
-    {
-      "url": "http://localhost:5173/api/geometry/1622",
-      "status": 404,
-      "statusText": "Not Found",
-      "method": "GET"
-    }
-  ],
-  "console_errors": [
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)",
-    "Failed to load resource: the server responded with a status of 404 (Not Found)"
-  ],
-  "console_logs_count": 22,
+  "failed_requests": [],
+  "console_errors": [],
+  "console_logs_count": 6,
   "screenshots_captured": [
     "smoke_01_loaded.png",
     "smoke_02_component_selected.png",
