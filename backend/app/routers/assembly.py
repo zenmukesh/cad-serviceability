@@ -188,5 +188,13 @@ def delete_assembly(assembly_id: int, db: Session = Depends(get_db)):
     assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()
     if not assembly:
         raise HTTPException(status_code=404, detail=f"Assembly {assembly_id} not found")
+    sha256 = assembly.sha256
     db.delete(assembly)
     db.commit()
+
+    # Evict in-memory shape cache and any persistent analysis cache for this assembly
+    try:
+        from app.services.geometry_service import evict_shape_cache_for_assembly
+        evict_shape_cache_for_assembly(assembly_id, sha256)
+    except Exception as e:
+        logger.warning(f"Could not evict shape cache on delete for assembly {assembly_id}: {e}")

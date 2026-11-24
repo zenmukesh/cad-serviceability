@@ -12,9 +12,11 @@ Implements Milestone 2 with rigorously validated CAD calculations:
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import logging
 import math
 import re
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Set
 
@@ -59,8 +61,22 @@ logger = logging.getLogger(__name__)
 
 ALGO_VERSION = "2.1.0"
 
-# Global in-memory cache: (sha256, algo_version, params) -> {cad_entity_id: cq.Shape}
-_SHAPE_CACHE: Dict[Any, Dict[str, Any]] = {}
+# Thread-safe, bounded LRU cache for CAD OpenCASCADE solid shapes: key -> Dict[str, cq.Shape]
+_SHAPE_CACHE_MAX_ENTRIES = 4
+_SHAPE_CACHE_LOCK = threading.Lock()
+_SHAPE_CACHE: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+
+
+def evict_shape_cache_for_assembly(assembly_id: int, sha256: str = "") -> None:
+    """Evict an assembly's loaded shapes from in-memory cache upon deletion or invalidation."""
+    with _SHAPE_CACHE_LOCK:
+        keys_to_remove = [
+            k for k in _SHAPE_CACHE.keys()
+            if (sha256 and sha256 in str(k)) or f"{assembly_id}:" in str(k)
+        ]
+        for k in keys_to_remove:
+            _SHAPE_CACHE.pop(k, None)
+        logger.info(f"Evicted {len(keys_to_remove)} shape cache entries for assembly {assembly_id}")
 
 CARDINAL_DIRECTIONS: List[Tuple[str, Tuple[float, float, float]]] = [
     ("+X", (1.0, 0.0, 0.0)),
@@ -102,12 +118,15 @@ def get_assembly_shapes(assembly_id: int, db: Session) -> Dict[str, Any]:
     if not assembly:
         raise ValueError(f"Assembly {assembly_id} not found in database")
 
-    cache_key = (assembly.sha256, ALGO_VERSION, "shapes")
+    cache_key = f"{assembly.sha256}:{ALGO_VERSION}:shapes"
     legacy_key = f"{assembly_id}:{assembly.sha256}"
-    if cache_key in _SHAPE_CACHE:
-        return _SHAPE_CACHE[cache_key]
-    if legacy_key in _SHAPE_CACHE:
-        return _SHAPE_CACHE[legacy_key]
+    with _SHAPE_CACHE_LOCK:
+        if cache_key in _SHAPE_CACHE:
+            _SHAPE_CACHE.move_to_end(cache_key)
+            return _SHAPE_CACHE[cache_key]
+        if legacy_key in _SHAPE_CACHE:
+            _SHAPE_CACHE.move_to_end(legacy_key)
+            return _SHAPE_CACHE[legacy_key]
 
     step_path = _find_assembly_step_file(assembly)
     if not step_path:
@@ -186,8 +205,14 @@ def get_assembly_shapes(assembly_id: int, db: Session) -> Dict[str, Any]:
         else:
             traverse_node(root_lbl, root_loc, "")
 
-    _SHAPE_CACHE[cache_key] = shapes_dict
-    _SHAPE_CACHE[legacy_key] = shapes_dict
+    with _SHAPE_CACHE_LOCK:
+        _SHAPE_CACHE[cache_key] = shapes_dict
+        _SHAPE_CACHE.move_to_end(cache_key)
+        _SHAPE_CACHE[legacy_key] = shapes_dict
+        _SHAPE_CACHE.move_to_end(legacy_key)
+        while len(_SHAPE_CACHE) > _SHAPE_CACHE_MAX_ENTRIES * 2:
+            evicted, _ = _SHAPE_CACHE.popitem(last=False)
+            logger.info(f"LRU evicted oldest shape cache entry: {evicted}")
     logger.info(f"Cached {len(shapes_dict)} CAD solid shapes for assembly {assembly_id} ({cache_key})")
     return shapes_dict
 
