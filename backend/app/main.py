@@ -17,7 +17,34 @@ from app.routers import upload, assembly, serviceability
 from app.utils.version_info import collect_versions
 from app.utils.perf_tracker import get_call_counts
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+
+# ─── Lifespan ─────────────────────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(f"Starting {settings.app_name} v{settings.app_version}")
+    # Ensure upload directory exists
+    Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+    # Initialise database tables
+    init_db()
+    # Log dependency versions for traceability
+    versions = collect_versions()
+    logger.info(f"Software versions: {versions}")
+    # Pre-warm analysis process pool
+    try:
+        from app.services.analysis_manager import get_process_pool
+        pool = get_process_pool()
+        pool.submit(abs, 1)
+    except Exception as e:
+        logger.warning(f"Could not pre-warm process pool: {e}")
+    yield
+    try:
+        from app.services.analysis_manager import shutdown_process_pool
+        shutdown_process_pool()
+    except Exception:
+        pass
+
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -32,9 +59,10 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description=(
-        "AI-Assisted CAD-Based Serviceability Assessment System. "
-        "Milestone 1: STEP file import and 3D viewer backend."
+        "CAD-Native Geometric Serviceability Assessment Platform. "
+        "Exact B-Rep clearances, interference volumes, tool approach, disassembly DAG, and explainable scoring."
     ),
+    lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
@@ -82,34 +110,16 @@ app.include_router(assembly.router)
 app.include_router(serviceability.router)
 
 
-# ─── Startup ──────────────────────────────────────────────────────────────────
-@app.on_event("startup")
-async def startup_event():
-    logger.info(f"Starting {settings.app_name} v{settings.app_version}")
-    # Ensure upload directory exists
-    Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-    # Initialise database tables
-    init_db()
-    # Log dependency versions for traceability
-    versions = collect_versions()
-    logger.info(f"Software versions: {versions}")
-    # Pre-warm analysis process pool
-    try:
-        from app.services.analysis_manager import get_process_pool
-        pool = get_process_pool()
-        pool.submit(abs, 1)
-    except Exception as e:
-        logger.warning(f"Could not pre-warm process pool: {e}")
-
-
 # ─── Health check ─────────────────────────────────────────────────────────────
 @app.get("/api/health", tags=["health"], summary="Health check and version info")
 async def health():
+    from app.services.analysis_manager import get_cache_stats
     return {
         "status": "ok",
         "app": settings.app_name,
         "version": settings.app_version,
         "software_versions": collect_versions(),
+        "cache_stats": get_cache_stats(),
     }
 
 
@@ -119,10 +129,10 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception on {request.url}: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"detail": "An internal server error occurred.", "code": "internal_error"},
+        content={"detail": "An internal server error occurred.", "code": "INTERNAL_SERVER_ERROR", "message": "An internal server error occurred."},
     )
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)

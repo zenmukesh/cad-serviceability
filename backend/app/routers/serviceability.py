@@ -68,7 +68,7 @@ async def run_serviceability_analysis(
         return bundle.report
     except Exception as e:
         logger.exception(f"Error analyzing assembly {assembly_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Geometric analysis failed during calculation. See server logs.")
 
 
 @router.get(
@@ -90,7 +90,7 @@ async def get_serviceability_report(
         return bundle.report
     except Exception as e:
         logger.exception(f"Error generating report for assembly {assembly_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate serviceability report: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate serviceability report. See server logs.")
 
 
 @router.get(
@@ -117,7 +117,7 @@ def get_component_obstructions(
         return analyze_component_obstructions(assembly_id, component_id, db)
     except Exception as e:
         logger.exception(f"Error computing obstructions for component {component_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Obstruction analysis failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Obstruction analysis failed. See server logs.")
 
 
 @router.get(
@@ -150,8 +150,7 @@ def get_component_clearances(
         )
     except Exception as e:
         logger.exception(f"Error computing clearances for component {component_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Clearance measurement failed: {str(e)}")
-
+        raise HTTPException(status_code=500, detail="Clearance measurement failed. See server logs.")
 
 @router.get(
     "/assemblies/{assembly_id}/clearances",
@@ -175,8 +174,7 @@ def get_all_clearances(
         return analyze_clearances(assembly_id, db, min_threshold_mm=min_clearance_mm)
     except Exception as e:
         logger.exception(f"Error computing all clearances for assembly {assembly_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Clearance calculations failed: {str(e)}")
-
+        raise HTTPException(status_code=500, detail="Clearance calculations failed. See server logs.")
 
 @router.get(
     "/assemblies/{assembly_id}/dependency-graph",
@@ -199,14 +197,12 @@ def get_dependency_graph(
         return build_disassembly_graph(assembly_id, db)
     except Exception as e:
         logger.exception(f"Error building dependency graph for assembly {assembly_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Dependency graph generation failed: {str(e)}")
-
+        raise HTTPException(status_code=500, detail="Dependency graph generation failed. See server logs.")
 
 @router.post("/cache/clear", tags=["cache"], summary="Clear analysis cache")
 def clear_cache():
     clear_analysis_cache()
     return {"status": "ok", "message": "Analysis cache cleared"}
-
 
 @router.post(
     "/assemblies/{assembly_id}/section",
@@ -233,5 +229,5 @@ def get_assembly_section(
         )
     except Exception as e:
         logger.exception(f"Error computing section for assembly {assembly_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Section computation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Section computation failed. See server logs.")
 

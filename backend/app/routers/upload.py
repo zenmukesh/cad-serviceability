@@ -153,42 +153,77 @@ async def upload_step_file(
             detail=f"Unsupported file type '{suffix}'. Accepted: .step, .stp",
         )
 
-    # Read file content with size guard
-    content = await file.read(MAX_BYTES + 1)
-    if len(content) > MAX_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds maximum size of {settings.max_upload_size_mb} MB",
-        )
-    if len(content) == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
-    # Save to uploads directory
     upload_dir = Path(settings.upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    # Temporary file first, then move (atomic)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix, dir=upload_dir)
+    total_bytes = 0
+    first_chunk = b""
+    chunk_size = 65536
+
     try:
         with os.fdopen(tmp_fd, "wb") as f:
-            f.write(content)
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                if total_bytes == 0:
+                    first_chunk = chunk
+                total_bytes += len(chunk)
+                if total_bytes > MAX_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds maximum size of {settings.max_upload_size_mb} MB",
+                    )
+                f.write(chunk)
+
+        if total_bytes == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        # Validate standard ISO-10303-21 header declaration
+        if b"ISO-10303-21" not in first_chunk[:2048]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid STEP file: missing standard ISO-10303-21 header declaration.",
+            )
 
         file_hash = sha256_file(Path(tmp_path))
         final_path = upload_dir / f"{file_hash}{suffix}"
-        shutil.move(tmp_path, str(final_path))
-    except Exception as e:
+        if not final_path.exists():
+            shutil.move(tmp_path, str(final_path))
+        else:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+    except HTTPException:
         try:
-            os.unlink(tmp_path)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
+        raise
+    except Exception as e:
+        try:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        except Exception:
+            pass
+        logger.exception(f"File upload storage failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save uploaded file. See server logs.")
+
+    # Deduplication check
+    existing_assembly = db.query(Assembly).filter(Assembly.sha256 == file_hash).first()
+    label = revision_label
+    if existing_assembly and not label:
+        label = f"Re-upload of #{existing_assembly.id}"
 
     # Create Assembly record
     versions = collect_versions()
     assembly = Assembly(
         filename=file.filename,
         sha256=file_hash,
-        revision_label=revision_label,
+        revision_label=label,
         status="processing",
         software_versions=json.dumps(versions),
     )
@@ -205,7 +240,7 @@ async def upload_step_file(
     )
 
     logger.info(
-        f"Accepted upload: {file.filename} ({len(content)} bytes) "
+        f"Accepted upload: {file.filename} ({total_bytes} bytes) "
         f"-> assembly_id={assembly.id}"
     )
 

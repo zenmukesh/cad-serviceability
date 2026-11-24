@@ -356,3 +356,28 @@ async def get_or_compute_analysis_bundle(
     finally:
         async with _FLIGHT_LOCK:
             _IN_FLIGHT_FUTURES.pop(cache_key, None)
+
+
+def get_cache_stats() -> Dict[str, Any]:
+    """Retrieve cache size and statistics for health monitoring."""
+    sqlite_count = 0
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT count(*) FROM analysis_cache")).fetchone()
+            if row:
+                sqlite_count = row[0]
+    except Exception:
+        pass
+    return {
+        "lru_entries": len(_LRU_CACHE),
+        "lru_max_size": _LRU_MAX_SIZE,
+        "sqlite_entries": sqlite_count,
+        "algo_version": ALGORITHM_VERSION,
+    }
+
+
+def shutdown_process_pool():
+    global _PROCESS_POOL
+    if _PROCESS_POOL is not None:
+        _PROCESS_POOL.shutdown(wait=False)
+        _PROCESS_POOL = None

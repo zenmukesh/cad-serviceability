@@ -101,6 +101,24 @@ class TestUploadEndpoint:
         assert resp.status_code == 202
         assert resp.json()["sha256"] == expected_hash
 
+    def test_upload_missing_iso_header_rejected(self, client):
+        """STEP file missing ISO-10303-21 declaration should be rejected with 400."""
+        fake_content = b"NOT A VALID STEP FILE WITHOUT ISO HEADER\nSOME CAD DATA;\n"
+        files = {"file": ("corrupt.step", fake_content, "application/octet-stream")}
+        resp = client.post("/api/upload", files=files)
+        assert resp.status_code == 400
+        assert "ISO-10303-21" in resp.json()["detail"]
+
+    def test_upload_duplicate_dedupe_label(self, client, simple_box_step):
+        """Re-uploading existing file assigns re-upload reference label."""
+        with open(simple_box_step, "rb") as f:
+            content = f.read()
+        files = {"file": ("test_box.step", content, "application/octet-stream")}
+        resp1 = client.post("/api/upload", files=files)
+        resp2 = client.post("/api/upload", files=files)
+        assert resp1.status_code == 202
+        assert resp2.status_code == 202
+
 
 class TestComponentLabelEndpoint:
     def test_update_label_nonexistent(self, client):
