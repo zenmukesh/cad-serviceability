@@ -6,6 +6,7 @@ import type {
   ComponentObstructionReport,
   DisassemblyGraph,
   AssemblySectionResponse,
+  AnalysisJobStatus,
 } from '../types/serviceability'
 
 const client = axios.create({
@@ -81,6 +82,27 @@ export async function pollAssemblyStatus(
     }
     poll()
   })
+}
+
+export async function startAnalysisJob(
+  assemblyId: number,
+  minClearanceMm = 3.0
+): Promise<AnalysisJobStatus> {
+  const res = await client.post<AnalysisJobStatus>(
+    `/api/assemblies/${assemblyId}/jobs/analyze`,
+    { min_clearance_mm: minClearanceMm }
+  )
+  return res.data
+}
+
+export async function getAnalysisJobStatus(jobId: string): Promise<AnalysisJobStatus> {
+  const res = await client.get<AnalysisJobStatus>(`/api/analysis/jobs/${jobId}`)
+  return res.data
+}
+
+export async function getAnalysisJobReport(jobId: string): Promise<AssemblyServiceabilityReport> {
+  const res = await client.get<AssemblyServiceabilityReport>(`/api/analysis/jobs/${jobId}/report`)
+  return res.data
 }
 
 export async function getServiceabilityReport(

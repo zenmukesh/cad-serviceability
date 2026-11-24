@@ -22,6 +22,8 @@ import concurrent.futures
 import hashlib
 import json
 import logging
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
@@ -303,11 +305,14 @@ async def get_or_compute_analysis_bundle(
     if cache_key in _LRU_CACHE:
         logger.info(f"Serving analysis bundle from in-memory LRU cache for {cache_key[:12]}...")
         _LRU_CACHE.move_to_end(cache_key)
-        return _LRU_CACHE[cache_key]
+        bundle = _LRU_CACHE[cache_key]
+        bundle.report.is_cached = True
+        return bundle
 
     # 2. Check persistent SQLite cache
     bundle = _load_from_sqlite(cache_key)
     if bundle:
+        bundle.report.is_cached = True
         _LRU_CACHE[cache_key] = bundle
         _LRU_CACHE.move_to_end(cache_key)
         return bundle
@@ -381,3 +386,107 @@ def shutdown_process_pool():
     if _PROCESS_POOL is not None:
         _PROCESS_POOL.shutdown(wait=False)
         _PROCESS_POOL = None
+
+
+@dataclass
+class JobInfo:
+    job_id: str
+    assembly_id: int
+    min_clearance_mm: float
+    status: str  # "pending", "processing", "completed", "failed"
+    stage: str   # "initializing", "clearances", "obstructions", "graph", "scoring", "complete"
+    percent: int
+    start_time: float
+    end_time: Optional[float] = None
+    is_cached: bool = False
+    error: Optional[str] = None
+    bundle: Optional[AnalysisBundle] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        now = self.end_time if self.end_time else time.time()
+        return {
+            "job_id": self.job_id,
+            "assembly_id": self.assembly_id,
+            "status": self.status,
+            "stage": self.stage,
+            "percent": self.percent,
+            "elapsed_seconds": round(now - self.start_time, 2),
+            "is_cached": self.is_cached,
+            "error": self.error,
+        }
+
+
+_ANALYSIS_JOBS: Dict[str, JobInfo] = {}
+
+
+async def create_analysis_job(
+    assembly_id: int,
+    db: Session,
+    min_clearance_mm: float = 3.0,
+) -> JobInfo:
+    assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()
+    if not assembly:
+        raise ValueError(f"Assembly {assembly_id} not found")
+
+    job_id = str(uuid.uuid4())[:8]
+    cached = get_cached_bundle(assembly.sha256, min_clearance_mm)
+    if cached:
+        cached.report.is_cached = True
+        job = JobInfo(
+            job_id=job_id,
+            assembly_id=assembly_id,
+            min_clearance_mm=min_clearance_mm,
+            status="completed",
+            stage="complete",
+            percent=100,
+            start_time=time.time(),
+            end_time=time.time(),
+            is_cached=True,
+            bundle=cached,
+        )
+        _ANALYSIS_JOBS[job_id] = job
+        return job
+
+    job = JobInfo(
+        job_id=job_id,
+        assembly_id=assembly_id,
+        min_clearance_mm=min_clearance_mm,
+        status="processing",
+        stage="clearances",
+        percent=25,
+        start_time=time.time(),
+        is_cached=False,
+    )
+    _ANALYSIS_JOBS[job_id] = job
+
+    # Run in background task
+    async def _runner():
+        try:
+            job.stage = "clearances"
+            job.percent = 25
+            db_worker = SessionLocal()
+            try:
+                bundle = await get_or_compute_analysis_bundle(
+                    job.assembly_id, db_worker, job.min_clearance_mm
+                )
+            finally:
+                db_worker.close()
+
+            job.status = "completed"
+            job.stage = "complete"
+            job.percent = 100
+            job.end_time = time.time()
+            job.bundle = bundle
+        except Exception as e:
+            logger.exception(f"Background job {job.job_id} failed: {e}")
+            job.status = "failed"
+            job.stage = "error"
+            job.error = str(e)
+            job.end_time = time.time()
+
+    asyncio.create_task(_runner())
+    return job
+
+
+def get_analysis_job(job_id: str) -> Optional[JobInfo]:
+    return _ANALYSIS_JOBS.get(job_id)

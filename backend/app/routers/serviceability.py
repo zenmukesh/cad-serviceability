@@ -25,6 +25,7 @@ from app.schemas.serviceability import (
     AssemblyServiceabilityReport,
     SectionPlaneRequest,
     AssemblySectionResponse,
+    AnalysisJobStatus,
 )
 from app.services.geometry_service import (
     analyze_clearances,
@@ -36,6 +37,8 @@ from app.services.analysis_manager import (
     get_or_compute_analysis_bundle,
     get_cached_bundle,
     clear_analysis_cache,
+    create_analysis_job,
+    get_analysis_job,
 )
 from app.services.section_service import compute_assembly_section
 
@@ -45,6 +48,61 @@ router = APIRouter(prefix="/api", tags=["serviceability"])
 
 class AnalyzeRequest(BaseModel):
     min_clearance_mm: Optional[float] = 3.0
+
+
+@router.post(
+    "/assemblies/{assembly_id}/jobs/analyze",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=AnalysisJobStatus,
+    summary="Start background serviceability analysis job",
+)
+async def start_analysis_job(
+    assembly_id: int,
+    request: Optional[AnalyzeRequest] = None,
+    db: Session = Depends(get_db),
+):
+    min_clearance = request.min_clearance_mm if (request and request.min_clearance_mm is not None) else 3.0
+    try:
+        job = await create_analysis_job(assembly_id, db, min_clearance)
+        return job.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Failed to start analysis job for assembly {assembly_id}: {e}")
+        raise HTTPException(status_code=500, detail="Could not create analysis job")
+
+
+@router.get(
+    "/analysis/jobs/{job_id}",
+    response_model=AnalysisJobStatus,
+    summary="Get status and progress of an analysis job",
+)
+def get_job_status(job_id: str):
+    job = get_analysis_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return job.to_dict()
+
+
+@router.get(
+    "/analysis/jobs/{job_id}/report",
+    response_model=AssemblyServiceabilityReport,
+    summary="Get completed report from an analysis job",
+)
+def get_job_report(job_id: str):
+    job = get_analysis_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if job.status == "processing" or job.status == "pending":
+        raise HTTPException(
+            status_code=202,
+            detail=f"Analysis job {job_id} is still {job.status} (stage: {job.stage}, {job.percent}%)",
+        )
+    if job.status == "failed":
+        raise HTTPException(status_code=500, detail=f"Analysis job failed: {job.error}")
+    if not job.bundle or not job.bundle.report:
+        raise HTTPException(status_code=404, detail="Job report unavailable")
+    return job.bundle.report
 
 
 @router.post(

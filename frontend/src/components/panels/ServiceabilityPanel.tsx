@@ -337,9 +337,20 @@ export default function ServiceabilityPanel() {
             {serviceabilityReport && (
               <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    Overall Assembly Serviceability
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Overall Assembly Serviceability
+                    </span>
+                    {serviceabilityReport.is_cached ? (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-800">
+                        Cached (Instant)
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-950/80 text-blue-400 border border-blue-800">
+                        Computed Fresh
+                      </span>
+                    )}
+                  </div>
                   <button
                     onClick={handleRunAnalysis}
                     className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"

@@ -182,3 +182,33 @@ class TestAssemblyComparison:
         assert data["modified_count"] == 0
         assert data["unchanged_count"] == data["total_components_a"]
         assert len(data["changes"]) == data["total_components_a"]
+
+
+class TestAnalysisJobs:
+    def test_start_job_nonexistent_assembly(self, client):
+        resp = client.post("/api/assemblies/99999/jobs/analyze")
+        assert resp.status_code == 404
+
+    def test_get_nonexistent_job(self, client):
+        resp = client.get("/api/analysis/jobs/nonexistent")
+        assert resp.status_code == 404
+
+    def test_start_and_check_job(self, client, simple_box_step):
+        resp = client.get("/api/assemblies")
+        assert resp.status_code == 200
+        assemblies = resp.json()
+        aid = assemblies[0]["id"]
+
+        start_resp = client.post(f"/api/assemblies/{aid}/jobs/analyze")
+        assert start_resp.status_code == 202
+        job_data = start_resp.json()
+        assert "job_id" in job_data
+        assert job_data["assembly_id"] == aid
+        assert job_data["status"] in ("processing", "completed")
+
+        poll_resp = client.get(f"/api/analysis/jobs/{job_data['job_id']}")
+        assert poll_resp.status_code == 200
+        status_data = poll_resp.json()
+        assert status_data["job_id"] == job_data["job_id"]
+        assert "percent" in status_data
+        assert "stage" in status_data

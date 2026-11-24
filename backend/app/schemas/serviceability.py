@@ -230,6 +230,18 @@ class AssemblyServiceabilityReport(BaseModel):
 
     # Settings used
     settings: Dict[str, Any] = Field(default_factory=dict)
+    is_cached: bool = False
+
+
+class AnalysisJobStatus(BaseModel):
+    job_id: str
+    assembly_id: int
+    status: str  # "pending", "processing", "completed", "failed"
+    stage: str   # "initializing", "clearances", "obstructions", "graph", "scoring", "complete"
+    percent: int
+    elapsed_seconds: float
+    is_cached: bool = False
+    error: Optional[str] = None
 
 
 # ─── Multi-Axis Sectioning Schemas (Phase D) ────────────────────────────────

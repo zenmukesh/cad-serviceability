@@ -200,6 +200,18 @@ export interface AssemblyServiceabilityReport {
   critical_safety_findings: string[]
   general_recommendations: string[]
   settings: Record<string, any>
+  is_cached?: boolean
+}
+
+export interface AnalysisJobStatus {
+  job_id: string
+  assembly_id: number
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  stage: string
+  percent: number
+  elapsed_seconds: number
+  is_cached: boolean
+  error?: string | null
 }
 
 // ─── Multi-Axis Sectioning (Phase D) ────────────────────────────────────────
