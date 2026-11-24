@@ -11,10 +11,6 @@ BASE_PLATE_KEYWORDS: List[str] = [
     "baseplate",
     "bedplate",
     "foundation",
-    "chassis",
-    "bed",
-    "frame",
-    "base",
 ]
 
 FASTENER_KEYWORDS: List[str] = [
@@ -25,9 +21,6 @@ FASTENER_KEYWORDS: List[str] = [
     "washer",
     "shank",
     "stud",
-    "pin",
-    "circlip",
-    "retainer",
 ]
 
 SHAFT_OR_ROTATING_KEYWORDS: List[str] = [
@@ -48,6 +41,7 @@ COVER_OR_HOUSING_KEYWORDS: List[str] = [
     "shield",
     "enclosure",
     "lid",
+    "guard",
 ]
 
 PRIORITY_Z_REMOVAL_KEYWORDS: List[str] = [
@@ -102,8 +96,8 @@ def is_baseplate(name: str, comp: Any = None, all_components: Optional[List[Any]
     if any(k in q for k in BASE_PLATE_KEYWORDS):
         return True
 
-    # Cheap geometric fallback: lowest Z elevation and large footprint
-    if comp is not None and all_components:
+    # Cheap geometric fallback if name is generic or unnamed CAD solid
+    if comp is not None and all_components and (not name or name.lower().startswith("solid") or name.lower().startswith("part")):
         return is_geometric_baseplate(comp, all_components)
     return False
 
