@@ -129,13 +129,15 @@ def get_component_geometry(component_id: int, db: Session = Depends(get_db)) -> 
     if not comp:
         raise HTTPException(status_code=404, detail=f"Component {component_id} not found")
 
-    if not comp.mesh_json:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No mesh data for component {component_id}. "
-                "The component may not have tessellatable geometry."
-            ),
+    if not comp.is_leaf or not comp.mesh_json:
+        # Non-leaf containers or components without tessellatable geometry return empty mesh payload cleanly
+        return MeshResponse(
+            component_id=component_id,
+            vertices=[],
+            faces=[],
+            normals=[],
+            vertex_count=0,
+            face_count=0,
         )
 
     try:

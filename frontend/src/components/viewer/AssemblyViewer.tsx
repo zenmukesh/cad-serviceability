@@ -49,6 +49,8 @@ function ComponentMesh({
   useEffect(() => {
     let cancelled = false
     const load = async () => {
+      // Never request geometry for non-leaf container components
+      if (!component.is_leaf) return
       try {
         let data = meshCache.get(component.id)
         if (!data) {
