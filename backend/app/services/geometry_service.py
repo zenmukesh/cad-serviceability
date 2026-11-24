@@ -41,6 +41,14 @@ from app.schemas.serviceability import (
     ToolApproachResult,
     AssemblyServiceabilityReport,
 )
+from app.services.heuristics import (
+    is_fastener,
+    is_baseplate,
+    is_housing_or_cover,
+    PRIORITY_Z_REMOVAL_KEYWORDS,
+    BASE_PLATE_KEYWORDS,
+    FASTENER_KEYWORDS,
+)
 
 from app.services.motion_planner import (
     normalize_vector,
@@ -269,18 +277,6 @@ def compute_shape_intersection_volume(shape1: Any, shape2: Any) -> Tuple[Optiona
     except Exception as e:
         logger.debug(f"Boolean intersection failed: {e}")
         return None, f"ERROR: {e}"
-
-
-def is_fastener(name: str) -> bool:
-    """Detect if a component is a fastener based on its CAD name or label."""
-    q = name.lower()
-    return any(k in q for k in ["bolt", "screw", "fastener", "nut", "washer", "shank", "stud"])
-
-
-def is_housing_or_cover(name: str) -> bool:
-    """Detect if a component is a protective housing, cover, guard, or shield."""
-    q = name.lower()
-    return any(k in q for k in ["housing", "cover", "casing", "cap", "enclosure", "shield", "lid", "guard"])
 
 
 def get_physical_fastener_id(comp_name: str, parent_cad_id: str) -> str:
@@ -1492,8 +1488,7 @@ def build_disassembly_graph(
 
     # Base plates and foundations support all mounted components and cannot be removed beforehand
     for c in leaf_components:
-        c_name = c.display_name.lower()
-        if any(k in c_name for k in ["baseplate", "bedplate", "foundation"]):
+        if is_baseplate(c.display_name, c, leaf_components):
             for other in leaf_components:
                 if other.id != c.id and not is_fastener(other.display_name):
                     if other.bb_zmin >= c.bb_zmax - 1.0:
@@ -1735,7 +1730,7 @@ def build_disassembly_graph(
                         prev_dir,
                         travel_mm,
                     )
-                    if any(k in ent["name"].lower() for k in ["screw", "bolt", "dipstick", "gear", "pinion", "sprocket"]) and d_name == "+Z":
+                    if any(k in ent["name"].lower() for k in PRIORITY_Z_REMOVAL_KEYWORDS) and d_name == "+Z":
                         step_cost -= 2.0
                     if step_cost < best_cost:
                         best_cost = step_cost
