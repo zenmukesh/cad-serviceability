@@ -1,7 +1,11 @@
 """
 FastAPI application entry point for the CAD Serviceability Assessment System.
 
-Milestone 1: STEP import, component extraction, tessellation, 3D viewer data.
+Production CAD Serviceability Assessment Engine:
+- Multi-directional B-Rep ray casting & collision extraction
+- Pairwise clearance & solid interference classification
+- Disassembly sequence planning with motion path verification
+- Explainable scoring & revision comparison
 """
 import logging
 import sys
@@ -135,4 +139,4 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=False)
