@@ -1,3 +1,7 @@
+"""
+Development Verification Script: Motion and Collision Simulation
+Used during exploratory development of directional extraction. Not for production runtime.
+"""
 import cadquery as cq
 import time
 

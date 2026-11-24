@@ -3,17 +3,21 @@ sys.path.insert(0, '.')
 from app.database import get_db, init_db
 from app.models.assembly import Assembly, Component
 from app.services.geometry_service import build_disassembly_graph, get_assembly_shapes
+"""
+Development Simulation Script: B-Rep Swept Motion Checks
+Developer tool for simulating swept motion stepping.
+"""
 import cadquery as cq
 
 init_db()
 db = next(get_db())
-a = db.query(Assembly).filter(Assembly.filename.like('%gearbox%')).first()
+a = db.query(Assembly).filter(Assembly.filename.like('%blind%')).first()
 shapes = get_assembly_shapes(a.id, db)
 leaf_components = db.query(Component).filter(Component.assembly_id == a.id, Component.is_leaf == 1).all()
 comp_by_id = {c.id: c for c in leaf_components}
 
 graph = build_disassembly_graph(a.id, db)
-print(f"Total sequence steps for gearbox: {len(graph.sequence)}")
+print(f"Total sequence steps: {len(graph.sequence)}")
 
 asm_xmin = min(c.bb_xmin for c in leaf_components)
 asm_xmax = max(c.bb_xmax for c in leaf_components)
@@ -40,8 +44,10 @@ for s in graph.sequence:
     vec = DIR_VECTORS.get(r_dir, (0.0, 0.0, 1.0))
     vx, vy, vz = vec
 
+    # Obstacles currently still installed
     obs_ids = installed_ids - set(moving_ids)
 
+    # Compute bounding box of moving component(s)
     m_xmin = min(c.bb_xmin for c in moving_comps)
     m_xmax = max(c.bb_xmax for c in moving_comps)
     m_ymin = min(c.bb_ymin for c in moving_comps)
@@ -49,6 +55,7 @@ for s in graph.sequence:
     m_zmin = min(c.bb_zmin for c in moving_comps)
     m_zmax = max(c.bb_zmax for c in moving_comps)
 
+    # Exit distance
     if vx > 0:
         L_exit = max(20.0, (asm_xmax - m_xmin) + 10.0)
     elif vx < 0:
@@ -63,6 +70,7 @@ for s in graph.sequence:
         L_exit = max(20.0, (m_zmax - asm_zmin) + 10.0)
     L_exit = min(L_exit, 400.0)
 
+    # Swept AABB
     swept_xmin = min(m_xmin, m_xmin + L_exit * vx)
     swept_xmax = max(m_xmax, m_xmax + L_exit * vx)
     swept_ymin = min(m_ymin, m_ymin + L_exit * vy)
@@ -70,14 +78,17 @@ for s in graph.sequence:
     swept_zmin = min(m_zmin, m_zmin + L_exit * vz)
     swept_zmax = max(m_zmax, m_zmax + L_exit * vz)
 
+    # Broad phase
     candidate_obs = []
     for oid in obs_ids:
         oc = comp_by_id[oid]
+        # Check AABB intersection with swept box
         if (swept_xmax >= oc.bb_xmin and swept_xmin <= oc.bb_xmax and
             swept_ymax >= oc.bb_ymin and swept_ymin <= oc.bb_ymax and
             swept_zmax >= oc.bb_zmin and swept_zmin <= oc.bb_zmax):
             candidate_obs.append(oc)
 
+    # Narrow phase
     step_size = max(4.0, min(15.0, (m_xmax - m_xmin + m_ymax - m_ymin + m_zmax - m_zmin) / 6))
     t_vals = []
     curr_t = step_size
@@ -120,4 +131,5 @@ for s in graph.sequence:
     status_str = f"BLOCKED by {colliding_obs_name} at d={collision_dist:.1f}mm (vol={collision_vol:.1f}mm3)" if collision_found else f"VERIFIED CLEAR (d={L_exit:.1f}mm)"
     print(f"Step {s.step_number:2d}: {s.component_name:30} Dir={r_dir:2} -> {status_str}")
 
+    # Remove moving components from installed set
     installed_ids.difference_update(moving_ids)
