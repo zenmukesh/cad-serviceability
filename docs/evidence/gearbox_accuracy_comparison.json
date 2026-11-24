@@ -1,0 +1,280 @@
+{
+  "dipstick_gear_interference": {
+    "volume_mm3": 55.22051920099425,
+    "status": "SUCCESS",
+    "expected_volume_mm3": 55.22
+  },
+  "filter_canister_access": {
+    "+X": {
+      "is_clear": true,
+      "free_travel_mm": 600.0,
+      "blockers": [],
+      "blocker_dist": []
+    },
+    "-X": {
+      "is_clear": false,
+      "free_travel_mm": 2.0,
+      "blockers": [
+        "BearingBlock_B",
+        "Shaft",
+        "Gear",
+        "Dipstick",
+        "BearingBlock_A",
+        "Motor"
+      ],
+      "blocker_dist": [
+        2.0,
+        4.0,
+        56.0,
+        59.0,
+        92.0,
+        144.0
+      ]
+    },
+    "+Y": {
+      "is_clear": false,
+      "free_travel_mm": 37.28,
+      "blockers": [
+        "BaseBolt_4"
+      ],
+      "blocker_dist": [
+        37.28
+      ]
+    },
+    "-Y": {
+      "is_clear": false,
+      "free_travel_mm": 37.28,
+      "blockers": [
+        "BaseBolt_3"
+      ],
+      "blocker_dist": [
+        37.28
+      ]
+    },
+    "+Z": {
+      "is_clear": false,
+      "free_travel_mm": 4.0,
+      "blockers": [
+        "FilterBracket"
+      ],
+      "blocker_dist": [
+        4.0
+      ]
+    },
+    "-Z": {
+      "is_clear": false,
+      "free_travel_mm": 0.0,
+      "blockers": [
+        "BasePlate"
+      ],
+      "blocker_dist": [
+        0.0
+      ]
+    }
+  },
+  "close_clearances_sample": [
+    {
+      "target": "BasePlate",
+      "neighbor": "BearingBlock_A",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BasePlate",
+      "neighbor": "BearingBlock_B",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BasePlate",
+      "neighbor": "SensorBlock",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BasePlate",
+      "neighbor": "FilterCanister",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BasePlate",
+      "neighbor": "FilterBracket",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BasePlate",
+      "neighbor": "BaseBolt_1",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BasePlate",
+      "neighbor": "BaseBolt_2",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BasePlate",
+      "neighbor": "BaseBolt_3",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BasePlate",
+      "neighbor": "BaseBolt_4",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BearingBlock_A",
+      "neighbor": "CoverPlate",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BearingBlock_B",
+      "neighbor": "CoverPlate",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "Gear",
+      "neighbor": "Dipstick",
+      "distance_mm": 0.0,
+      "classification": "INTERFERENCE",
+      "is_contact": false,
+      "overlap_vol": 55.221
+    },
+    {
+      "target": "CoverPlate",
+      "neighbor": "CoverScrew_1",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "CoverPlate",
+      "neighbor": "CoverScrew_2",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "CoverPlate",
+      "neighbor": "CoverScrew_3",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "CoverPlate",
+      "neighbor": "CoverScrew_4",
+      "distance_mm": 0.0,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BearingBlock_A",
+      "neighbor": "Shaft",
+      "distance_mm": 0.05,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BearingBlock_B",
+      "neighbor": "Shaft",
+      "distance_mm": 0.05,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "Shaft",
+      "neighbor": "Gear",
+      "distance_mm": 0.05,
+      "classification": "CONTACT",
+      "is_contact": true,
+      "overlap_vol": 0.0
+    },
+    {
+      "target": "BearingBlock_A",
+      "neighbor": "CoverScrew_1",
+      "distance_mm": 0.25,
+      "classification": "CLEARANCE",
+      "is_contact": false,
+      "overlap_vol": null
+    },
+    {
+      "target": "BearingBlock_A",
+      "neighbor": "CoverScrew_2",
+      "distance_mm": 0.25,
+      "classification": "CLEARANCE",
+      "is_contact": false,
+      "overlap_vol": null
+    },
+    {
+      "target": "BearingBlock_B",
+      "neighbor": "CoverScrew_3",
+      "distance_mm": 0.25,
+      "classification": "CLEARANCE",
+      "is_contact": false,
+      "overlap_vol": null
+    },
+    {
+      "target": "BearingBlock_B",
+      "neighbor": "CoverScrew_4",
+      "distance_mm": 0.25,
+      "classification": "CLEARANCE",
+      "is_contact": false,
+      "overlap_vol": null
+    },
+    {
+      "target": "CoverPlate",
+      "neighbor": "Dipstick",
+      "distance_mm": 0.25,
+      "classification": "CLEARANCE",
+      "is_contact": false,
+      "overlap_vol": null
+    },
+    {
+      "target": "Motor",
+      "neighbor": "SensorBlock",
+      "distance_mm": 0.3,
+      "classification": "CLEARANCE",
+      "is_contact": false,
+      "overlap_vol": null
+    }
+  ],
+  "overall_score": 87.3,
+  "critical_issues_count": 1,
+  "warnings_count": 16
+}
