@@ -13,6 +13,8 @@ Asserts all 7 verified milestone fixes with tolerance <= 0.05 mm:
 """
 import pytest
 from pathlib import Path
+
+pytestmark = pytest.mark.slow
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
