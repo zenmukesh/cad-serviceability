@@ -25,6 +25,8 @@ from app.schemas.assembly import (
     ComponentRead,
     ComponentLabelUpdate,
     MeshResponse,
+    ComponentDelta,
+    AssemblyComparisonResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -198,3 +200,139 @@ def delete_assembly(assembly_id: int, db: Session = Depends(get_db)):
         evict_shape_cache_for_assembly(assembly_id, sha256)
     except Exception as e:
         logger.warning(f"Could not evict shape cache on delete for assembly {assembly_id}: {e}")
+
+
+@router.get(
+    "/assemblies/{assembly_a_id}/compare/{assembly_b_id}",
+    response_model=AssemblyComparisonResponse,
+    summary="Compare two assemblies and calculate revision deltas",
+)
+def compare_assemblies(
+    assembly_a_id: int,
+    assembly_b_id: int,
+    db: Session = Depends(get_db),
+) -> AssemblyComparisonResponse:
+    assembly_a = db.query(Assembly).filter(Assembly.id == assembly_a_id).first()
+    if not assembly_a:
+        raise HTTPException(status_code=404, detail=f"Assembly {assembly_a_id} not found")
+    assembly_b = db.query(Assembly).filter(Assembly.id == assembly_b_id).first()
+    if not assembly_b:
+        raise HTTPException(status_code=404, detail=f"Assembly {assembly_b_id} not found")
+
+    leaf_a = (
+        db.query(Component)
+        .filter(Component.assembly_id == assembly_a_id, Component.is_leaf == 1)
+        .order_by(Component.name, Component.id)
+        .all()
+    )
+    leaf_b = (
+        db.query(Component)
+        .filter(Component.assembly_id == assembly_b_id, Component.is_leaf == 1)
+        .order_by(Component.name, Component.id)
+        .all()
+    )
+
+    # Score lookup from cache if available
+    from app.services.analysis_manager import get_cached_bundle
+    bundle_a = get_cached_bundle(assembly_a.sha256, 1.0)
+    bundle_b = get_cached_bundle(assembly_b.sha256, 1.0)
+    score_a = round(bundle_a.report.overall_score, 1) if bundle_a and bundle_a.report else None
+    score_b = round(bundle_b.report.overall_score, 1) if bundle_b and bundle_b.report else None
+    score_delta = round(score_b - score_a, 1) if (score_a is not None and score_b is not None) else None
+
+    # Track components by (name, occurrence)
+    a_counts: dict[str, int] = {}
+    a_map: dict[tuple[str, int], Component] = {}
+    for c in leaf_a:
+        cnt = a_counts.get(c.name, 0)
+        a_map[(c.name, cnt)] = c
+        a_counts[c.name] = cnt + 1
+
+    b_counts: dict[str, int] = {}
+    b_map: dict[tuple[str, int], Component] = {}
+    for c in leaf_b:
+        cnt = b_counts.get(c.name, 0)
+        b_map[(c.name, cnt)] = c
+        b_counts[c.name] = cnt + 1
+
+    changes: list[ComponentDelta] = []
+    matched_b_keys: set[tuple[str, int]] = set()
+
+    for key, c_a in a_map.items():
+        if key in b_map:
+            matched_b_keys.add(key)
+            c_b = b_map[key]
+            vol_a = round(float(c_a.volume_mm3 or 0.0), 3)
+            vol_b = round(float(c_b.volume_mm3 or 0.0), 3)
+            vol_diff = round(vol_b - vol_a, 3)
+
+            bb_a = c_a.bounding_box or {}
+            bb_b = c_b.bounding_box or {}
+            dx = round(abs((bb_b.get("x_max", 0) - bb_b.get("x_min", 0)) - (bb_a.get("x_max", 0) - bb_a.get("x_min", 0))), 3)
+            dy = round(abs((bb_b.get("y_max", 0) - bb_b.get("y_min", 0)) - (bb_a.get("y_max", 0) - bb_a.get("y_min", 0))), 3)
+            dz = round(abs((bb_b.get("z_max", 0) - bb_b.get("z_min", 0)) - (bb_a.get("z_max", 0) - bb_a.get("z_min", 0))), 3)
+
+            is_modified = (abs(vol_diff) > 0.05) or (dx > 0.05 or dy > 0.05 or dz > 0.05)
+            change_type = "modified" if is_modified else "unchanged"
+
+            changes.append(
+                ComponentDelta(
+                    name=c_a.name,
+                    cad_entity_id=c_a.cad_entity_id,
+                    change_type=change_type,
+                    volume_a_mm3=vol_a,
+                    volume_b_mm3=vol_b,
+                    volume_delta_mm3=vol_diff,
+                    bb_delta={"dx": dx, "dy": dy, "dz": dz},
+                )
+            )
+        else:
+            vol_a = round(float(c_a.volume_mm3 or 0.0), 3)
+            changes.append(
+                ComponentDelta(
+                    name=c_a.name,
+                    cad_entity_id=c_a.cad_entity_id,
+                    change_type="removed",
+                    volume_a_mm3=vol_a,
+                    volume_b_mm3=None,
+                    volume_delta_mm3=-vol_a,
+                    bb_delta=None,
+                )
+            )
+
+    for key, c_b in b_map.items():
+        if key not in matched_b_keys:
+            vol_b = round(float(c_b.volume_mm3 or 0.0), 3)
+            changes.append(
+                ComponentDelta(
+                    name=c_b.name,
+                    cad_entity_id=c_b.cad_entity_id,
+                    change_type="added",
+                    volume_a_mm3=None,
+                    volume_b_mm3=vol_b,
+                    volume_delta_mm3=vol_b,
+                    bb_delta=None,
+                )
+            )
+
+    added_cnt = sum(1 for c in changes if c.change_type == "added")
+    removed_cnt = sum(1 for c in changes if c.change_type == "removed")
+    modified_cnt = sum(1 for c in changes if c.change_type == "modified")
+    unchanged_cnt = sum(1 for c in changes if c.change_type == "unchanged")
+
+    return AssemblyComparisonResponse(
+        assembly_a_id=assembly_a_id,
+        assembly_b_id=assembly_b_id,
+        assembly_a_filename=assembly_a.filename,
+        assembly_b_filename=assembly_b.filename,
+        score_a=score_a,
+        score_b=score_b,
+        score_delta=score_delta,
+        total_components_a=len(leaf_a),
+        total_components_b=len(leaf_b),
+        added_count=added_cnt,
+        removed_count=removed_cnt,
+        modified_count=modified_cnt,
+        unchanged_count=unchanged_cnt,
+        changes=changes,
+    )

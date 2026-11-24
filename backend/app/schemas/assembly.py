@@ -102,3 +102,30 @@ class UploadResponse(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
     code: str = "error"
+
+
+class ComponentDelta(BaseModel):
+    name: str
+    cad_entity_id: str
+    change_type: str  # "added" | "removed" | "modified" | "unchanged"
+    volume_a_mm3: Optional[float] = None
+    volume_b_mm3: Optional[float] = None
+    volume_delta_mm3: Optional[float] = None
+    bb_delta: Optional[dict[str, float]] = None
+
+
+class AssemblyComparisonResponse(BaseModel):
+    assembly_a_id: int
+    assembly_b_id: int
+    assembly_a_filename: str
+    assembly_b_filename: str
+    score_a: Optional[float] = None
+    score_b: Optional[float] = None
+    score_delta: Optional[float] = None
+    total_components_a: int
+    total_components_b: int
+    added_count: int
+    removed_count: int
+    modified_count: int
+    unchanged_count: int
+    changes: list[ComponentDelta] = []

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { Assembly, ComponentsResponse, MeshData, UploadResponse } from '../types/assembly'
+import type { Assembly, ComponentsResponse, MeshData, UploadResponse, AssemblyComparisonResponse } from '../types/assembly'
 import type {
   AssemblyServiceabilityReport,
   ClearanceMeasurement,
@@ -155,6 +155,16 @@ export async function getAssemblySection(
   const res = await client.post<AssemblySectionResponse>(
     `/api/assemblies/${assemblyId}/section`,
     params
+  )
+  return res.data
+}
+
+export async function compareAssemblies(
+  assemblyAId: number,
+  assemblyBId: number
+): Promise<AssemblyComparisonResponse> {
+  const res = await client.get<AssemblyComparisonResponse>(
+    `/api/assemblies/${assemblyAId}/compare/${assemblyBId}`
   )
   return res.data
 }

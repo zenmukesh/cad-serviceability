@@ -156,3 +156,29 @@ class TestErrorHandling:
     def test_nonexistent_route(self, client):
         resp = client.get("/api/nonexistent_route")
         assert resp.status_code == 404
+
+
+class TestAssemblyComparison:
+    def test_compare_nonexistent_assembly(self, client):
+        resp = client.get("/api/assemblies/99999/compare/99998")
+        assert resp.status_code == 404
+
+    def test_compare_same_assembly(self, client, simple_box_step):
+        # simple_box_step is already imported into the test DB
+        # Query assemblies
+        resp = client.get("/api/assemblies")
+        assert resp.status_code == 200
+        assemblies = resp.json()
+        assert len(assemblies) > 0
+        aid = assemblies[0]["id"]
+
+        comp_resp = client.get(f"/api/assemblies/{aid}/compare/{aid}")
+        assert comp_resp.status_code == 200
+        data = comp_resp.json()
+        assert data["assembly_a_id"] == aid
+        assert data["assembly_b_id"] == aid
+        assert data["added_count"] == 0
+        assert data["removed_count"] == 0
+        assert data["modified_count"] == 0
+        assert data["unchanged_count"] == data["total_components_a"]
+        assert len(data["changes"]) == data["total_components_a"]

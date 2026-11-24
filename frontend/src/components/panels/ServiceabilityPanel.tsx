@@ -11,7 +11,9 @@ import {
   ChevronRight,
   Scissors,
   X,
+  GitCompare,
 } from 'lucide-react'
+import RevisionComparisonTab from './RevisionComparisonTab'
 import { FreedomSphere, deriveCardinalLabel } from '../viewer/FreedomSphere'
 import { useAssemblyStore, RightPanelTab } from '../../store/assemblyStore'
 import {
@@ -289,6 +291,7 @@ export default function ServiceabilityPanel() {
     { id: 'obstructions', label: 'Access', icon: Compass },
     { id: 'clearances', label: 'Clearance', icon: Ruler },
     { id: 'disassembly', label: 'Sequence', icon: GitCommit },
+    { id: 'revision', label: 'Compare', icon: GitCompare },
   ]
 
   return (
@@ -1197,6 +1200,8 @@ export default function ServiceabilityPanel() {
             )}
           </div>
         )}
+
+        {rightPanelTab === 'revision' && <RevisionComparisonTab />}
       </div>
     </div>
   )

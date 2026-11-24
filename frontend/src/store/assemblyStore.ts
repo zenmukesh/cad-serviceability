@@ -17,6 +17,7 @@ export type RightPanelTab =
   | 'obstructions'
   | 'clearances'
   | 'disassembly'
+  | 'revision'
 
 export interface ClearanceLineVisual {
   p1: [number, number, number]
