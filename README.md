@@ -55,6 +55,7 @@ graph TD
 - **Persistent SQLite & LRU Caching:** Cold analysis on a 19-part gearbox takes **57.2 s** (continuous B-Rep swept-volume booleans). Warm reload returns in **89 ms** ($>600\times$ faster).
 - **Multi-Axis Slicing:** Dynamic cross-section planes (Top, Front, Right, and arbitrary tilt up to 30°) with real-time hatching line shaders.
 - **Continuous Swept Volume Planner:** Eliminates discrete jumping errors using `BRepPrimAPI_MakePrism` along candidate extraction vectors.
+- **Assembly Revision Comparison:** Evaluates revision deltas between any two loaded CAD assemblies (`/compare`), tracking added/removed/modified components, volume deltas ($\Delta V$), bounding-box shifts, and overall serviceability score changes.
 
 ---
 
@@ -111,6 +112,9 @@ Double-click `start_app.bat` in the repository root. This spins up the FastAPI b
 | `GET` | `/api/assemblies` | Lists all imported CAD assemblies with component summaries. |
 | `GET` | `/api/assemblies/{id}` | Retrieves full assembly metadata and component hierarchy. |
 | `POST` | `/api/assemblies/{id}/analyze` | Computes or returns bundled clearances, obstructions, DAG, and score. |
+| `POST` | `/api/assemblies/{id}/jobs/analyze` | Dispatches asynchronous background analysis worker task with polling job ID. |
+| `GET` | `/api/analysis/jobs/{job_id}` | Polls status (`queued`, `running`, `complete`, `failed`) and stage progress of background analysis. |
+| `GET` | `/api/assemblies/{a}/compare/{b}` | Computes revision deltas: added/removed/modified parts, volume & BB deltas, and score delta. |
 | `GET` | `/api/geometry/{comp_id}` | Provides tessellated WebGL mesh buffers (vertices, faces, normals). |
 | `PATCH` | `/api/components/{id}/label` | Updates user-assigned part classification labels. |
 | `POST` | `/api/cache/clear` | Purges persistent SQLite cache and in-memory LRU. |
@@ -121,5 +125,5 @@ Double-click `start_app.bat` in the repository root. This spins up the FastAPI b
 ## Limitations & Engineering Roadmap
 
 - **Component Name Heuristics:** The disassembly solver utilizes name substrings (`baseplate`, `screw`, `bolt`, `gear`) to guide support constraints. Assemblies with arbitrary solid names (e.g. `SOLID_01`) use bounding box fallbacks, but benefit from manual labeling via the UI. *Roadmap: Pure geometric support plane detection.*
-- **Assembly Revision Comparison:** Database schema supports SHA-256 and `revision_label` tracking. Visual side-by-side geometry comparison is currently in design. *Roadmap: Automated geometric diffing API.*
+- **True B-Rep Geometric Diffing:** Revision comparison accurately computes metadata deltas, added/removed parts, volume differences ($\Delta V$), and bounding box changes between assemblies. *Roadmap: Exact 3D boolean face-level B-Rep subtraction diffing.*
 - **Very Large Assemblies (200+ parts):** Cold analysis scaling on 200+ components can take several minutes due to $O(N^2)$ candidate swept-volume collisions. *Roadmap: GPU-accelerated BVH ray-culling.*
