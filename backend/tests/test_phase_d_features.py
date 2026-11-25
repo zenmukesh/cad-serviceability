@@ -132,11 +132,9 @@ def test_d2_section_api_endpoint(client: TestClient, db_session):
     from app.services.cad_importer import import_step_file
     from pathlib import Path
 
-    step_path = Path("test_data/gearbox_assembly.step")
+    step_path = Path(__file__).resolve().parent.parent / "test_data" / "gearbox_assembly.step"
     if not step_path.exists():
         step_path = Path("backend/test_data/gearbox_assembly.step")
-    if not step_path.exists():
-        step_path = Path("d:/projects/cad-serviceability/backend/test_data/gearbox_assembly.step")
 
     assert step_path.exists(), f"gearbox_assembly.step not found at {step_path}"
 
@@ -209,11 +207,9 @@ def test_d2_section_broadphase_culling_outside_assembly(client: TestClient, db_s
     from app.services.cad_importer import import_step_file
     from pathlib import Path
 
-    step_path = Path("test_data/gearbox_assembly.step")
+    step_path = Path(__file__).resolve().parent.parent / "test_data" / "gearbox_assembly.step"
     if not step_path.exists():
         step_path = Path("backend/test_data/gearbox_assembly.step")
-    if not step_path.exists():
-        step_path = Path("d:/projects/cad-serviceability/backend/test_data/gearbox_assembly.step")
 
     assert step_path.exists()
 
