@@ -1112,12 +1112,16 @@ def check_entity_extraction_path(
     assembly_bounds: Tuple[float, float, float, float, float, float],
     pre_existing_interferences: Optional[Set[Tuple[int, int]]] = None,
     stop_on_first_clash: bool = True,
+    pairwise_cache: Optional[Dict] = None,
+    overlap_cache: Optional[Dict] = None,
 ) -> Tuple[bool, float, List[str], Optional[float]]:
     """
     Validate an entity extraction trajectory along dir_vec using broad-phase swept AABB culling,
     exact BRep swept profile prism collision, and bisection to 0.01 mm.
     Pre-existing interfering pairs are allowed only if overlap volume does not increase.
     """
+    p_cache = pairwise_cache if pairwise_cache is not None else _PAIRWISE_SWEPT_COLLISION_CACHE
+    ov_cache = overlap_cache if overlap_cache is not None else _PAIRWISE_INITIAL_OVERLAP_CACHE
     vx, vy, vz = dir_vec
 
     # Required travel to clear all remaining solids via projection separation (A3)
@@ -1200,14 +1204,13 @@ def check_entity_extraction_path(
                 continue
             o_bb = {"xmin": oc.bb_xmin, "xmax": oc.bb_xmax, "ymin": oc.bb_ymin, "ymax": oc.bb_ymax, "zmin": oc.bb_zmin, "zmax": oc.bb_zmax}
 
-            shapes_key = id(shapes)
-            cache_key = (shapes_key, mc.cad_entity_id, dir_name, oc.cad_entity_id)
-            if cache_key in _PAIRWISE_SWEPT_COLLISION_CACHE:
-                hit, clash_d = _PAIRWISE_SWEPT_COLLISION_CACHE[cache_key]
+            cache_key = (mc.cad_entity_id, dir_name, oc.cad_entity_id)
+            if cache_key in p_cache:
+                hit, clash_d = p_cache[cache_key]
             else:
-                pair_ov_key = (shapes_key, min(mc.cad_entity_id, oc.cad_entity_id), max(mc.cad_entity_id, oc.cad_entity_id))
-                if pair_ov_key in _PAIRWISE_INITIAL_OVERLAP_CACHE:
-                    init_overlap = _PAIRWISE_INITIAL_OVERLAP_CACHE[pair_ov_key]
+                pair_ov_key = (min(mc.cad_entity_id, oc.cad_entity_id), max(mc.cad_entity_id, oc.cad_entity_id))
+                if pair_ov_key in ov_cache:
+                    init_overlap = ov_cache[pair_ov_key]
                 else:
                     init_overlap = 0.0
                     if (
@@ -1217,13 +1220,13 @@ def check_entity_extraction_path(
                     ):
                         vol, _ = compute_shape_intersection_volume(ms, osh)
                         init_overlap = vol or 0.0
-                    _PAIRWISE_INITIAL_OVERLAP_CACHE[pair_ov_key] = init_overlap
+                    ov_cache[pair_ov_key] = init_overlap
 
                 # Use max travel 250mm for pairwise cache so it is valid across all planner steps
                 hit, clash_d = check_shape_swept_collision(
                     ms, m_bb, dir_vec, 250.0, osh, o_bb, initial_overlap_vol=init_overlap
                 )
-                _PAIRWISE_SWEPT_COLLISION_CACHE[cache_key] = (hit, clash_d)
+                p_cache[cache_key] = (hit, clash_d)
 
             # Check if this hit is within L_exit
             if hit and (clash_d is None or clash_d <= L_exit):
@@ -1248,7 +1251,7 @@ def build_disassembly_graph(
     assembly_id: int,
     db: Session,
     max_search_nodes: int = 250,
-    timeout_seconds: float = 60.0,
+    timeout_seconds: float = 180.0,
     precomputed_obstructions: Optional[Dict[int, ComponentObstructionReport]] = None,
 ) -> DisassemblyGraph:
     """
@@ -1650,6 +1653,8 @@ def build_disassembly_graph(
     memo: Dict[frozenset, float] = {}
     best_partial: List[Tuple[str, str, float, float, List[str], List[DirectionAttempt]]] = []
     best_partial_cost = float("inf")
+    search_pairwise_cache: Dict[Tuple, Tuple[bool, Optional[float]]] = {}
+    search_overlap_cache: Dict[Tuple, float] = {}
 
     def search_best_sequence(
         remaining_keys: Set[str],
@@ -1704,7 +1709,9 @@ def build_disassembly_graph(
             dir_attempts: List[DirectionAttempt] = []
             for d_name, d_vec in CARDINAL_DIRECTIONS:
                 ok, max_travel, clashes, first_clash = check_entity_extraction_path(
-                    mems, d_name, d_vec, e_obs, shapes, assembly_bounds
+                    mems, d_name, d_vec, e_obs, shapes, assembly_bounds,
+                    pairwise_cache=search_pairwise_cache,
+                    overlap_cache=search_overlap_cache,
                 )
                 dir_attempts.append(
                     DirectionAttempt(
@@ -1958,7 +1965,9 @@ def build_disassembly_graph(
             else:
                 for d_name, d_vec in CARDINAL_DIRECTIONS:
                     ok, max_trav, clashes, clash_d = check_entity_extraction_path(
-                        mems, d_name, d_vec, e_obs, shapes, assembly_bounds
+                        mems, d_name, d_vec, e_obs, shapes, assembly_bounds,
+                        pairwise_cache=search_pairwise_cache,
+                        overlap_cache=search_overlap_cache,
                     )
                     dir_attempts.append(
                         DirectionAttempt(

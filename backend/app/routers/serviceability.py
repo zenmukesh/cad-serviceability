@@ -239,7 +239,7 @@ def get_all_clearances(
     response_model=DisassemblyGraph,
     summary="Get disassembly dependency graph and removal sequence",
 )
-def get_dependency_graph(
+async def get_dependency_graph(
     assembly_id: int,
     db: Session = Depends(get_db),
 ):
@@ -248,14 +248,18 @@ def get_dependency_graph(
         raise HTTPException(status_code=404, detail=f"Assembly {assembly_id} not found")
 
     cached = get_cached_bundle(assembly.sha256, 3.0)
-    if cached:
+    if cached and cached.graph:
         return cached.graph
 
     try:
-        return build_disassembly_graph(assembly_id, db)
+        bundle = await get_or_compute_analysis_bundle(assembly_id, db, 3.0)
+        return bundle.graph
     except Exception as e:
         logger.exception(f"Error building dependency graph for assembly {assembly_id}: {e}")
-        raise HTTPException(status_code=500, detail="Dependency graph generation failed. See server logs.")
+        try:
+            return build_disassembly_graph(assembly_id, db, timeout_seconds=180.0)
+        except Exception:
+            raise HTTPException(status_code=500, detail="Dependency graph generation failed. See server logs.")
 
 @router.post("/cache/clear", tags=["cache"], summary="Clear analysis cache")
 def clear_cache():

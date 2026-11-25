@@ -225,6 +225,19 @@ def clear_analysis_cache() -> None:
     """Clear both in-memory LRU cache and persistent SQLite analysis cache."""
     _LRU_CACHE.clear()
     try:
+        from app.services.geometry_service import (
+            _PAIRWISE_SWEPT_COLLISION_CACHE,
+            _PAIRWISE_INITIAL_OVERLAP_CACHE,
+            _SHAPE_CACHE,
+            _SHAPE_CACHE_LOCK,
+        )
+        _PAIRWISE_SWEPT_COLLISION_CACHE.clear()
+        _PAIRWISE_INITIAL_OVERLAP_CACHE.clear()
+        with _SHAPE_CACHE_LOCK:
+            _SHAPE_CACHE.clear()
+    except Exception:
+        pass
+    try:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM analysis_cache"))
         logger.info("Cleared in-memory and persistent SQLite analysis cache.")
@@ -343,14 +356,18 @@ async def get_or_compute_analysis_bundle(
             pool, _run_single_analysis_sync, assembly_id, min_clearance_mm
         )
 
-        # Store in LRU cache
-        _LRU_CACHE[cache_key] = bundle
-        _LRU_CACHE.move_to_end(cache_key)
-        while len(_LRU_CACHE) > _LRU_MAX_SIZE:
-            _LRU_CACHE.popitem(last=False)
-
-        # Persist to SQLite
-        _save_to_sqlite(cache_key, assembly.sha256, params_hash, bundle)
+        # Store in LRU cache and SQLite only if complete/verified (never cache transient timeout/budget exhaustion)
+        if bundle.graph.sequence_status != "budget_exhausted":
+            _LRU_CACHE[cache_key] = bundle
+            _LRU_CACHE.move_to_end(cache_key)
+            while len(_LRU_CACHE) > _LRU_MAX_SIZE:
+                _LRU_CACHE.popitem(last=False)
+            _save_to_sqlite(cache_key, assembly.sha256, params_hash, bundle)
+        else:
+            logger.warning(
+                f"Analysis returned budget_exhausted for {assembly.sha256[:12]}; "
+                f"not caching to allow future full evaluation."
+            )
 
         future.set_result(bundle)
         return bundle
