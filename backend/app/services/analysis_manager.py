@@ -205,20 +205,113 @@ def _save_to_sqlite(cache_key: str, sha256: str, params_hash: str, bundle: Analy
         logger.warning(f"Failed saving cache to SQLite for {cache_key}: {e}")
 
 
-def get_cached_bundle(sha256: str, min_clearance_mm: float) -> Optional[AnalysisBundle]:
-    """Retrieve precomputed bundle from in-memory LRU or SQLite persistent cache."""
+def remap_bundle_to_assembly(
+    bundle: AnalysisBundle,
+    target_assembly_id: int,
+    db: Session,
+) -> AnalysisBundle:
+    """
+    If a bundle was computed for a different assembly_id (e.g. re-imported STEP file
+    sharing the same SHA-256), remap all component IDs and assembly_id to match the
+    target assembly's primary keys so that frontend selection, clearances, and highlights match.
+    """
+    if bundle.report.assembly_id == target_assembly_id:
+        return _deserialize_bundle(_serialize_bundle(bundle))
+
+    tgt_comps = db.query(Component).filter(Component.assembly_id == target_assembly_id).all()
+    if not tgt_comps:
+        return _deserialize_bundle(_serialize_bundle(bundle))
+
+    tgt_by_cad = {t.cad_entity_id: t.id for t in tgt_comps if t.cad_entity_id}
+    tgt_by_name = {(t.user_label or t.name): t.id for t in tgt_comps if (t.user_label or t.name)}
+    tgt_by_name_raw = {t.name: t.id for t in tgt_comps if t.name}
+
+    id_map: Dict[int, int] = {}
+    src_comps = db.query(Component).filter(Component.assembly_id == bundle.report.assembly_id).all()
+    for sc in src_comps:
+        sc_disp = sc.user_label or sc.name
+        tid = tgt_by_cad.get(sc.cad_entity_id) or tgt_by_name.get(sc_disp) or tgt_by_name_raw.get(sc.name)
+        if tid:
+            id_map[sc.id] = tid
+
+    for node in bundle.graph.nodes:
+        if node.component_id not in id_map:
+            tid = tgt_by_cad.get(node.cad_entity_id) or tgt_by_name.get(node.name) or tgt_by_name_raw.get(node.name)
+            if tid:
+                id_map[node.component_id] = tid
+
+    for step in bundle.graph.sequence:
+        if step.component_id not in id_map:
+            tid = tgt_by_cad.get(step.cad_entity_id) or tgt_by_name.get(step.component_name) or tgt_by_name_raw.get(step.component_name)
+            if tid:
+                id_map[step.component_id] = tid
+
+    raw_data = {
+        "report": bundle.report.model_dump(mode="json"),
+        "graph": bundle.graph.model_dump(mode="json"),
+        "clearances": [c.model_dump(mode="json") for c in bundle.clearances],
+        "obstructions": {str(k): v.model_dump(mode="json") for k, v in bundle.obstructions.items()},
+    }
+
+    raw_data["report"]["assembly_id"] = target_assembly_id
+    for cs in raw_data["report"].get("component_scores", []):
+        cs["component_id"] = id_map.get(cs["component_id"], cs["component_id"])
+
+    raw_data["graph"]["assembly_id"] = target_assembly_id
+    for node in raw_data["graph"].get("nodes", []):
+        node["component_id"] = id_map.get(node["component_id"], node["component_id"])
+    for edge in raw_data["graph"].get("edges", []):
+        edge["precedent_id"] = id_map.get(edge["precedent_id"], edge["precedent_id"])
+        edge["dependent_id"] = id_map.get(edge["dependent_id"], edge["dependent_id"])
+    for step in raw_data["graph"].get("sequence", []):
+        step["component_id"] = id_map.get(step["component_id"], step["component_id"])
+        step["member_component_ids"] = [id_map.get(m, m) for m in step.get("member_component_ids", [])]
+
+    for clr in raw_data.get("clearances", []):
+        clr["target_component_id"] = id_map.get(clr["target_component_id"], clr["target_component_id"])
+        clr["neighbor_component_id"] = id_map.get(clr["neighbor_component_id"], clr["neighbor_component_id"])
+
+    new_obs = {}
+    for k, obs in raw_data.get("obstructions", {}).items():
+        old_k = int(k)
+        new_k = id_map.get(old_k, old_k)
+        obs["target_component_id"] = id_map.get(obs.get("target_component_id", old_k), obs.get("target_component_id", old_k))
+        for d in obs.get("directions", []):
+            for ob in d.get("obstructing_components", []):
+                ob["component_id"] = id_map.get(ob["component_id"], ob["component_id"])
+        new_obs[str(new_k)] = obs
+    raw_data["obstructions"] = new_obs
+
+    return AnalysisBundle(
+        report=AssemblyServiceabilityReport.model_validate(raw_data["report"]),
+        graph=DisassemblyGraph.model_validate(raw_data["graph"]),
+        clearances=[ClearanceMeasurement.model_validate(c) for c in raw_data["clearances"]],
+        obstructions={int(k): ComponentObstructionReport.model_validate(v) for k, v in raw_data["obstructions"].items()},
+    )
+
+
+def get_cached_bundle(
+    sha256: str,
+    min_clearance_mm: float,
+    target_assembly_id: Optional[int] = None,
+    db: Optional[Session] = None,
+) -> Optional[AnalysisBundle]:
+    """Retrieve precomputed bundle from in-memory LRU or SQLite persistent cache, remapping IDs if target_assembly_id is provided."""
     cache_key, _ = make_cache_keys(sha256, min_clearance_mm)
+    bundle: Optional[AnalysisBundle] = None
     if cache_key in _LRU_CACHE:
         _LRU_CACHE.move_to_end(cache_key)
-        return _LRU_CACHE[cache_key]
+        bundle = _LRU_CACHE[cache_key]
+    else:
+        # Check SQLite persistent cache
+        bundle = _load_from_sqlite(cache_key)
+        if bundle:
+            _LRU_CACHE[cache_key] = bundle
+            _LRU_CACHE.move_to_end(cache_key)
 
-    # Check SQLite persistent cache
-    bundle = _load_from_sqlite(cache_key)
-    if bundle:
-        _LRU_CACHE[cache_key] = bundle
-        _LRU_CACHE.move_to_end(cache_key)
-        return bundle
-    return None
+    if bundle and target_assembly_id is not None and db is not None:
+        return remap_bundle_to_assembly(bundle, target_assembly_id, db)
+    return bundle
 
 
 def clear_analysis_cache() -> None:
@@ -320,7 +413,7 @@ async def get_or_compute_analysis_bundle(
         _LRU_CACHE.move_to_end(cache_key)
         bundle = _LRU_CACHE[cache_key]
         bundle.report.is_cached = True
-        return bundle
+        return remap_bundle_to_assembly(bundle, assembly_id, db)
 
     # 2. Check persistent SQLite cache
     bundle = _load_from_sqlite(cache_key)
@@ -328,12 +421,12 @@ async def get_or_compute_analysis_bundle(
         bundle.report.is_cached = True
         _LRU_CACHE[cache_key] = bundle
         _LRU_CACHE.move_to_end(cache_key)
-        return bundle
+        return remap_bundle_to_assembly(bundle, assembly_id, db)
 
     # 3. Single-flight coordination for in-flight requests
     async with _FLIGHT_LOCK:
         if cache_key in _LRU_CACHE:
-            return _LRU_CACHE[cache_key]
+            return remap_bundle_to_assembly(_LRU_CACHE[cache_key], assembly_id, db)
 
         if cache_key in _IN_FLIGHT_FUTURES:
             future = _IN_FLIGHT_FUTURES[cache_key]
@@ -346,7 +439,8 @@ async def get_or_compute_analysis_bundle(
 
     if not is_initiator:
         logger.info(f"Single-flight: joining existing in-flight analysis for {cache_key[:12]}...")
-        return await future
+        res_bundle = await future
+        return remap_bundle_to_assembly(res_bundle, assembly_id, db)
 
     # 4. Initiator runs the analysis in a separate process pool so the event loop never locks
     try:
@@ -370,7 +464,7 @@ async def get_or_compute_analysis_bundle(
             )
 
         future.set_result(bundle)
-        return bundle
+        return remap_bundle_to_assembly(bundle, assembly_id, db)
     except Exception as e:
         logger.exception(f"Analysis failed for {cache_key[:12]}...: {e}")
         future.set_exception(e)
@@ -446,7 +540,7 @@ async def create_analysis_job(
         raise ValueError(f"Assembly {assembly_id} not found")
 
     job_id = str(uuid.uuid4())[:8]
-    cached = get_cached_bundle(assembly.sha256, min_clearance_mm)
+    cached = get_cached_bundle(assembly.sha256, min_clearance_mm, target_assembly_id=assembly.id, db=db)
     if cached:
         cached.report.is_cached = True
         job = JobInfo(

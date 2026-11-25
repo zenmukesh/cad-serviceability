@@ -167,7 +167,7 @@ def get_component_obstructions(
 
     assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()
     if assembly:
-        cached = get_cached_bundle(assembly.sha256, 3.0)
+        cached = get_cached_bundle(assembly.sha256, 3.0, target_assembly_id=assembly.id, db=db)
         if cached and component_id in cached.obstructions:
             return cached.obstructions[component_id]
 
@@ -195,7 +195,7 @@ def get_component_clearances(
 
     assembly = db.query(Assembly).filter(Assembly.id == assembly_id).first()
     if assembly:
-        cached = get_cached_bundle(assembly.sha256, min_clearance_mm)
+        cached = get_cached_bundle(assembly.sha256, min_clearance_mm, target_assembly_id=assembly.id, db=db)
         if cached:
             return [
                 c for c in cached.clearances
@@ -224,7 +224,7 @@ def get_all_clearances(
     if not assembly:
         raise HTTPException(status_code=404, detail=f"Assembly {assembly_id} not found")
 
-    cached = get_cached_bundle(assembly.sha256, min_clearance_mm)
+    cached = get_cached_bundle(assembly.sha256, min_clearance_mm, target_assembly_id=assembly.id, db=db)
     if cached:
         return cached.clearances
 
@@ -247,7 +247,7 @@ async def get_dependency_graph(
     if not assembly:
         raise HTTPException(status_code=404, detail=f"Assembly {assembly_id} not found")
 
-    cached = get_cached_bundle(assembly.sha256, 3.0)
+    cached = get_cached_bundle(assembly.sha256, 3.0, target_assembly_id=assembly.id, db=db)
     if cached and cached.graph:
         return cached.graph
 

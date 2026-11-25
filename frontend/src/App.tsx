@@ -33,6 +33,7 @@ export default function App() {
     components,
     setComponents,
     selectedComponentId,
+    dependencyGraph,
     serviceabilityReport,
     error,
     setError,
@@ -90,6 +91,15 @@ export default function App() {
   }
 
   const selectedComp = components.find((c) => c.id === selectedComponentId)
+  let selectedDisplayName = selectedComp ? selectedComp.display_name : null
+  if (!selectedDisplayName && dependencyGraph?.sequence && selectedComponentId != null) {
+    const step = dependencyGraph.sequence.find(
+      (s) => s.component_id === selectedComponentId || (s.member_component_ids && s.member_component_ids.includes(selectedComponentId))
+    )
+    if (step) {
+      selectedDisplayName = step.component_name
+    }
+  }
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans">
@@ -266,7 +276,7 @@ export default function App() {
           <div className="flex items-center gap-1.5">
             <span className="text-slate-500">Selected:</span>
             <span className="text-slate-200 font-mono">
-              {selectedComp ? selectedComp.display_name : 'None'}
+              {selectedDisplayName || 'None'}
             </span>
           </div>
 

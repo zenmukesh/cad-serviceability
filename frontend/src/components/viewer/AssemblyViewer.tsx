@@ -562,13 +562,29 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
     const set = new Set<number>()
     if (selectedComponentId == null) return set
     set.add(selectedComponentId)
+    // If selected component belongs to a unified fastener step, include all member components
+    if (dependencyGraph?.sequence) {
+      for (const step of dependencyGraph.sequence) {
+        if (
+          step.component_id === selectedComponentId ||
+          (step.member_component_ids && step.member_component_ids.includes(selectedComponentId))
+        ) {
+          set.add(step.component_id)
+          if (step.member_component_ids) {
+            for (const mid of step.member_component_ids) {
+              set.add(mid)
+            }
+          }
+        }
+      }
+    }
     for (const c of components) {
       if (isDescendantOf(c, selectedComponentId, byId, byCadId)) {
         set.add(c.id)
       }
     }
     return set
-  }, [selectedComponentId, components, byId, byCadId])
+  }, [selectedComponentId, components, byId, byCadId, dependencyGraph])
 
   // Compute assembly center for radial exploded view (Phase 1)
   const assemblyCenter = useMemo(() => {
@@ -635,10 +651,21 @@ function Scene({ showGrid, fitViewTrigger }: SceneProps) {
   // 3.4 Selected Part's Best Removal Direction (Primary Visual: arrow + translucent cone)
   const selectedRemovalVisual = useMemo(() => {
     if (selectedComponentId == null) return null
-    const comp = components.find((c) => c.id === selectedComponentId)
-    if (!comp || !comp.bounding_box) return null
+    let comp = components.find((c) => c.id === selectedComponentId)
+    let bb = comp?.bounding_box
+    if (!bb && dependencyGraph?.sequence) {
+      const step = dependencyGraph.sequence.find(
+        (s) => s.component_id === selectedComponentId || (s.member_component_ids && s.member_component_ids.includes(selectedComponentId))
+      )
+      if (step && step.member_component_ids && step.member_component_ids.length > 0) {
+        const firstId = step.member_component_ids[0]
+        const memComp = components.find((c) => c.id === firstId)
+        bb = memComp?.bounding_box
+        if (!comp) comp = memComp
+      }
+    }
+    if (!comp || !bb) return null
 
-    const bb = comp.bounding_box
     const center: [number, number, number] = [
       (bb.xmin + bb.xmax) / 2,
       (bb.ymin + bb.ymax) / 2,

@@ -21,6 +21,7 @@ import {
   runServiceabilityAnalysis,
   getComponentObstructions,
   getComponentClearances,
+  getAllClearances,
   getDependencyGraph,
   getAssemblySection,
 } from '../../api/client'
@@ -99,6 +100,9 @@ export default function ServiceabilityPanel() {
         setServiceabilityReport(rep)
         const dep = await getDependencyGraph(currentAssembly.id)
         setDependencyGraph(dep)
+        // Auto-populate all assembly pairwise clearances so Clearance tab is immediately populated
+        const allClrs = await getAllClearances(currentAssembly.id, minClearanceMm)
+        setClearances(allClrs)
       } catch (err: any) {
         console.warn('Could not auto-fetch serviceability report:', err)
       } finally {
@@ -110,8 +114,12 @@ export default function ServiceabilityPanel() {
 
   // Fetch component-specific obstruction & clearance when selection changes
   useEffect(() => {
-    if (!currentAssembly || selectedComponentId == null) {
+    if (!currentAssembly) return
+    if (selectedComponentId == null) {
       setSelectedObstructionReport(null)
+      getAllClearances(currentAssembly.id, minClearanceMm)
+        .then((clrs) => setClearances(clrs))
+        .catch(() => {})
       return
     }
 
@@ -204,6 +212,9 @@ export default function ServiceabilityPanel() {
       dist: c.distance_mm,
       label: `${c.target_component_name} ↔ ${c.neighbor_component_name}`,
     })
+    if (c.target_component_id) {
+      selectComponent(c.target_component_id)
+    }
     toast.success(`Clearance: ${c.distance_mm.toFixed(2)} mm visualized in 3D`)
   }
 
@@ -858,11 +869,25 @@ export default function ServiceabilityPanel() {
               />
             </div>
 
+            {/* Scope Header */}
+            <div className="flex items-center justify-between text-[11px] px-1">
+              <span className="font-semibold text-slate-300">
+                {selectedComponentId != null
+                  ? `Pairwise Clearances for Selected Part (${clearances.length})`
+                  : `All Assembly Clearances (${clearances.length})`}
+              </span>
+              {selectedComponentId != null && (
+                <button
+                  onClick={() => selectComponent(null)}
+                  className="text-[10px] text-blue-400 hover:text-blue-200 underline cursor-pointer"
+                >
+                  Show All Clearances
+                </button>
+              )}
+            </div>
+
             {clearances.length > 0 ? (
               <div className="space-y-2">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                  Measured Pairwise Clearances ({clearances.length})
-                </div>
                 {clearances.map((c, idx) => (
                   <div
                     key={idx}
@@ -877,8 +902,13 @@ export default function ServiceabilityPanel() {
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-medium text-slate-200 truncate max-w-[160px]">
-                        {c.neighbor_component_name}
+                      <span
+                        className="font-medium text-slate-200 truncate max-w-[200px]"
+                        title={`${c.target_component_name} ↔ ${c.neighbor_component_name}`}
+                      >
+                        {selectedComponentId != null
+                          ? c.neighbor_component_name
+                          : `${c.target_component_name} ↔ ${c.neighbor_component_name}`}
                       </span>
                       <span
                         className={`font-mono font-bold text-xs ${
@@ -1055,17 +1085,15 @@ export default function ServiceabilityPanel() {
                     return (
                       <div
                         key={step.step_number}
-                        className={`p-2.5 rounded-lg border text-xs transition-colors space-y-1.5 ${
+                        onClick={() => selectComponent(step.component_id)}
+                        className={`p-2.5 rounded-lg border text-xs transition-colors space-y-1.5 cursor-pointer ${
                           isSelected
-                            ? 'bg-blue-600/25 border-blue-500 shadow-xs'
+                            ? 'bg-blue-600/25 border-blue-500 shadow-xs ring-1 ring-blue-500/50'
                             : 'bg-slate-950/40 border-slate-800 hover:bg-slate-800/60'
                         }`}
                       >
                         {/* Row Header */}
-                        <div
-                          className="flex items-center justify-between cursor-pointer"
-                          onClick={() => selectComponent(step.component_id)}
-                        >
+                        <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <span className="w-5 h-5 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center font-mono text-[10px] font-bold">
                               {step.step_number}
