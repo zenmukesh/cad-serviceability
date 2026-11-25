@@ -62,6 +62,7 @@ test.describe('PART 3: Freedom Sphere Fix, Demotion & Consistency', () => {
 
     const toggleBtn = page.locator('[data-testid="toggle-removal-card-btn"]')
     const sphereContainer = page.locator('[data-testid="freedom-sphere-container"]')
+    await toggleBtn.waitFor({ state: 'visible', timeout: 20000 })
 
     // 1. Open sphere
     await toggleBtn.click()

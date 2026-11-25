@@ -4,8 +4,13 @@ test.describe('Part 1: Fusion-360-Style Navigation & ViewCube', () => {
   test.beforeEach(async ({ page }) => {
     test.setTimeout(90000)
     await page.goto('/')
-    // Wait for the viewer canvas and CAD debugging interface to be ready
+    // Wait for components to load and viewer to be ready
+    await page.waitForFunction(() => {
+      const store = (window as any).useAssemblyStore?.getState?.()
+      return store && store.components && store.components.length > 0 && !store.isLoading
+    }, { timeout: 60000 })
     await page.waitForFunction(() => (window as any).__CAD_VIEWER__ != null, { timeout: 60000 })
+    await page.waitForTimeout(500)
   })
 
   test('1.1 & 1.2: Diagonal Shift+middle drag rotates camera about two axes (free tumble)', async ({
@@ -147,13 +152,16 @@ test.describe('Part 1: Fusion-360-Style Navigation & ViewCube', () => {
   })
 
   test('1.4: ViewCube face clicks orient camera along expected axes', async ({ page }) => {
+    // Wait for ViewCube component to initialize
+    await page.waitForFunction(() => (window as any).__VIEW_CUBE__ != null, { timeout: 15000 })
+
     // Test TOP, FRONT, and RIGHT views
     const testFaces = ['TOP', 'FRONT', 'RIGHT', 'BOTTOM', 'BACK', 'LEFT']
 
     for (const face of testFaces) {
       await page.evaluate((f) => (window as any).__VIEW_CUBE__.clickFace(f), face)
-      // Wait for slerp transition (~300ms)
-      await page.waitForTimeout(400)
+      // Wait for slerp transition (~350ms) to settle
+      await page.waitForTimeout(600)
 
       const pos: number[] = await page.evaluate(() =>
         (window as any).__CAD_VIEWER__.getCameraPosition()
