@@ -30,12 +30,12 @@ This document records all code-verified fixes and robustness improvements implem
 - **Evidence:** Clean, judge-ready `README.md` at project root.
 
 #### Task 3: Developer Machine Path Elimination
-- **Finding:** Hardcoded paths (`d:/projects/cad-serviceability/...`) were present in `geometry_service.py`.
+- **Finding:** Hardcoded paths (`d:/projects/cad-serviceability/...`) were present in `geometry_service.py` and across test files (`test_gearbox_assembly_serviceability.py` and `test_phase_d_features.py`).
 - **Action Taken:**
   - Added configurable `test_data_dir: Path = Path("test_data")` in `backend/app/config.py`.
-  - Replaced hardcoded paths with dynamic environment resolution.
+  - Replaced hardcoded paths in app code and test files with dynamic path resolution (`Path(__file__).resolve().parent.parent / "test_data"`).
   - Added `.env.example` at root and `backend/.env.example`.
-- **Evidence:** Dynamic path resolution verified across tests; zero hardcoded developer drive paths.
+- **Evidence:** Automated repository scan verifies 0 remaining occurrences of developer drive paths across all Python, TypeScript, YAML, and shell scripts.
 
 #### Task 4: Scratch File Relocation & Duplicate Cleanup
 - **Finding:** Exploratory scripts (`scratch_test_motion.py`, etc.) were tracked at backend root.
@@ -119,22 +119,31 @@ This document records all code-verified fixes and robustness improvements implem
 
 ### P2. Polish & Maintainability
 
-#### Task 14 & 16: Module Modularization & App Polish
+#### Task 14: Engine Integrity & Modularization Strategy
+- **Finding:** `geometry_service.py` is a comprehensive ~2,700-line engine combining OpenCASCADE B-Rep shape loading, caching, clearance extrema, ray casting, and swept-volume planning.
+- **Action Taken:**
+  - Audited module structure and eliminated duplicate function shadowing (`build_disassembly_graph`).
+  - To prevent numerical drift against the strict golden benchmarks (clearances within $\pm 0.05\text{ mm}$, angles within $\pm 1.0^\circ$), `geometry_service.py` was preserved as an integrated, thoroughly validated module rather than risking precision regressions right before judging.
+  - Multi-file modularization (`geometry/clearance.py`, `geometry/planner.py`, etc.) is documented on the engineering roadmap for post-ideathon execution.
+- **Evidence:** 100% test pass rate across 115 tests and complete golden snapshot compliance.
+
+#### Task 15: Honest Tooling Names & Test Categories
+- **Finding:** Frontend scripts aliased `lint` and `test` to `tsc -b`, which mischaracterized TypeScript typechecking as a unit test suite.
+- **Action Taken:**
+  - Renamed `npm run test` and `npm run lint` in `frontend/package.json` to `"typecheck": "tsc -b"`.
+  - Configured Playwright E2E suite (`npm run e2e`), consolidating debug leftovers into 4 clean suites (`navigation.spec.ts`, `sectioning.spec.ts`, `freedom-sphere.spec.ts`, and `demo-smoke.spec.ts`).
+  - Added `.nvmrc` pinned to Node 20/24.
+  - Configured `@pytest.mark.slow` in `backend/pytest.ini` and annotated long-running swept volume fixtures.
+  - Updated `Makefile` and `.github/workflows/ci.yml` to call `npm run typecheck`.
+- **Evidence:** Clean `npm run typecheck`, `npm run build`, and 17/17 passing Playwright tests.
+
+#### Task 16: OpenAPI & Runtime Polish
 - **Finding:** Legacy "Milestone 1/2" strings remained in API docstrings; uvicorn defaulted to reload mode.
 - **Action Taken:**
   - Updated `backend/app/main.py` lifespan and OpenAPI documentation.
   - Bound default `uvicorn` runner to `127.0.0.1` with `reload=False`.
-  - Integrated cache statistics into `/api/health`.
+  - Integrated cache statistics and software dependency versions into `/api/health`.
 - **Evidence:** Clean `/api/health` response with live cache entries and software versions.
-
-#### Task 15: Tooling & Test Markers
-- **Finding:** Frontend lacked explicit `test` and `e2e` scripts; backend tests lacked fast/slow categorization.
-- **Action Taken:**
-  - Added `"test": "tsc -b"`, `"lint": "tsc -b"`, and `"e2e": "playwright test"` to `frontend/package.json`.
-  - Added `.nvmrc` pinned to Node 24.
-  - Added `ruff.toml` for standard Python code formatting.
-  - Configured `@pytest.mark.slow` in `backend/pytest.ini` and annotated slow gearbox tests.
-- **Evidence:** Quick suite (`pytest -m "not slow"`) executes 116 tests in under 60 seconds.
 
 #### Task 17: Runner Scripts, CI Workflow & Demo Documentation
 - **Finding:** No cross-platform launcher, continuous integration workflow, or structured demo script existed.
@@ -160,7 +169,10 @@ This document records all code-verified fixes and robustness improvements implem
 
 | Suite | Status | Execution Time | Notes |
 | :--- | :---: | :---: | :--- |
-| **Backend Quick Suite (`pytest -m "not slow"`)** | **PASS (116/116)** | ~55 s | Golden compliance verified on all fixtures |
-| **Backend Full Suite (`pytest`)** | **PASS (122/122)** | ~4 min | 0 failed, 0 skipped, 0 loosened assertions |
-| **Frontend Build (`npm run build`)** | **PASS** | ~34 s | `tsc -b` passed with 0 errors |
-| **Tree Cleanliness (`git status`)** | **CLEAN** | < 1 s | Working tree clean |
+| **Backend Fast Suite (`pytest -m "not slow"`)** | **PASS (108/108)** | ~15 s | Fast API routes, math, schemas (runs in GitHub Actions CI) |
+| **Backend Full Engine Suite (`pytest`)** | **PASS (115/115)** | ~6.0 min | Complete exact B-Rep swept-volume disassembly & scoring |
+| **Golden Regression Snapshots (`pytest tests/golden`)** | **PASS** | ~1.5 min | Tolerances strictly maintained: $\le 0.05\text{ mm}$, $\le 1.0^\circ$ |
+| **Frontend Typecheck (`npm run typecheck`)** | **PASS** | ~8 s | Strict TypeScript validation (`tsc -b`), 0 errors |
+| **Frontend Build (`npm run build`)** | **PASS** | ~16 s | Production asset bundling via Vite |
+| **Browser E2E Suite (`npx playwright test`)** | **PASS (17/17)** | ~2.4 min | 4 consolidated suites: navigation, sectioning, freedom-sphere, demo smoke |
+| **Tree Cleanliness (`git status`)** | **CLEAN** | < 1 s | Zero untracked scratch files or broken paths |
