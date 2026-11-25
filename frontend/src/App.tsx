@@ -105,7 +105,7 @@ export default function App() {
             <h1 className="text-sm font-semibold tracking-wide flex items-center gap-2">
               CAD Serviceability Assessment
               <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-400 border border-blue-700/50">
-                Milestone 2
+                v0.2.0
               </span>
             </h1>
             <p className="text-[11px] text-slate-400">
@@ -142,6 +142,18 @@ export default function App() {
             title="Refresh assemblies"
           >
             <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          </button>
+
+          <button
+            onClick={() => {
+              const demo = assemblies.find((a) => a.filename.includes('gearbox')) || assemblies[0]
+              if (demo) selectAssembly(demo)
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors shadow-sm shadow-emerald-500/20"
+            title="Load standard 19-part gearbox demo assembly"
+          >
+            <Box className="w-3.5 h-3.5" />
+            <span>Load Demo</span>
           </button>
 
           <button

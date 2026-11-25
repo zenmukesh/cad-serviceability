@@ -376,7 +376,7 @@ export default function ServiceabilityPanel() {
 
                   <div className="flex-1 text-xs space-y-1">
                     <p className="text-slate-300">
-                      Based on CAD kernel bounding boxes, BRepExtrema clearances, and ray-casting access.
+                      Explainable DFM/DFA index combining access paths (25 pts), operating clearances (25 pts), disassembly sequence depth (25 pts), and fastener complexity (25 pts).
                     </p>
                     <div className="flex items-center gap-3 text-[11px] text-slate-400 pt-1">
                       <span>Parts: {serviceabilityReport.analyzed_components_count}</span>
