@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "tsc -b",
-    "test": "tsc -b",
+    "typecheck": "tsc -b",
     "e2e": "playwright test",
     "preview": "vite preview"
   },

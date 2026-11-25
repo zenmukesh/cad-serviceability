@@ -1,4 +1,4 @@
-.PHONY: all install run test lint build prewarm
+.PHONY: all install run test typecheck build prewarm
 
 all: install build
 
@@ -11,13 +11,12 @@ prewarm:
 
 test:
 	cd backend && pytest -m "not slow" -v
-	cd frontend && npm test
+
+typecheck:
+	cd frontend && npm run typecheck
 
 e2e:
 	cd frontend && npm run e2e
-
-lint:
-	cd frontend && npm run lint
 
 build:
 	cd frontend && npm run build
