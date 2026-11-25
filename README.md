@@ -104,6 +104,19 @@ Double-click `start_app.bat` in the repository root. This spins up the FastAPI b
 
 ---
 
+## Test Verification & CI Scope
+
+| Layer | Suite | Command | Scope & Runtime |
+|---|---|---|---|
+| **CI Backend (Fast)** | Unit & API Tests | `pytest backend/tests -m "not slow"` | Fast route verification, schemas, and geometric math (< 15 s). Runs on push/PR in GitHub Actions. |
+| **Comprehensive Engine** | Complete Test Suite | `pytest backend/tests` | All 115 tests including full swept-volume disassembly DAGs (~6.0 min). |
+| **Golden Regression** | Mathematical Reference | `pytest backend/tests/golden` | Strict tolerance regression (clearances $\le 0.05\text{ mm}$, angles $\le 1.0^\circ$). |
+| **Frontend Typecheck** | TypeScript Verification | `cd frontend && npm run typecheck` | Strict TypeScript verification (`tsc -b`). Runs in GitHub Actions. |
+| **Frontend Build** | Production Asset Build | `cd frontend && npm run build` | Vite asset compilation. Runs in GitHub Actions. |
+| **Browser E2E** | Playwright Test Suite | `cd frontend && npm run e2e` | 17 browser integration tests covering ViewCube, multi-axis sectioning, Freedom Sphere, and full demo smoke flow. |
+
+---
+
 ## Core API Endpoints
 
 | Method | Endpoint | Description |
